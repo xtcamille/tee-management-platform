@@ -2,7 +2,7 @@ package handler
 
 import (
 	"fmt"
-	"io"
+	"io/ioutil"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -17,7 +17,7 @@ func UploadCode(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	body, err := io.ReadAll(r.Body)
+	body, err := ioutil.ReadAll(r.Body)
 	if err != nil {
 		http.Error(w, "Failed to read body", http.StatusInternalServerError)
 		return
@@ -30,7 +30,7 @@ func UploadCode(w http.ResponseWriter, r *http.Request) {
 	}
 
 	codePath = filepath.Join(tempDir, "process.py")
-	if err := os.WriteFile(codePath, body, 0644); err != nil {
+	if err := ioutil.WriteFile(codePath, body, 0644); err != nil {
 		http.Error(w, "Failed to write file", http.StatusInternalServerError)
 		return
 	}
