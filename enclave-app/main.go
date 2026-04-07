@@ -6,7 +6,6 @@ import (
 	"io"
 	"log"
 	"net/http"
-	"os"
 	"os/exec"
 	"tee-management-platform/internal/ratls"
 )
@@ -72,7 +71,7 @@ func handleSecureData(w http.ResponseWriter, r *http.Request) {
 func processWithPython(data []byte) ([]byte, error) {
 	// Call the uploaded process.py (it should be at /bin/process.py inside Occlum)
 	cmd := exec.Command("python3", "/bin/process.py")
-	
+
 	// Set stdin to the received data
 	stdinPipe, err := cmd.StdinPipe()
 	if err != nil {

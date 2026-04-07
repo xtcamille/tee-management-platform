@@ -18,8 +18,8 @@ func main() {
 	// Send data to the running Enclave and get result
 	mux.HandleFunc("/process-data", handler.ProcessData)
 
-	log.Println("TEE Management Platform Server starting on :8080")
-	if err := http.ListenAndServe(":8080", mux); err != nil {
+	log.Println("TEE Management Platform Server starting on :8081")
+	if err := http.ListenAndServe(":8081", mux); err != nil {
 		log.Fatalf("Server failed to start: %v", err)
 	}
 }
