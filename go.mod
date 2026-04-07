@@ -1,3 +1,3 @@
 module tee-management-platform
 
-go 1.18.4
+go 1.18
