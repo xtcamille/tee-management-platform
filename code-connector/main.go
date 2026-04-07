@@ -27,7 +27,7 @@ func main() {
 		log.Fatalf("Failed to read script: %v", err)
 	}
 
-	resp, err := http.Post("http://localhost:8080/upload-code", "application/octet-stream", bytes.NewBuffer(body))
+	resp, err := http.Post("http://192.168.0.248:8081/upload-code", "application/octet-stream", bytes.NewBuffer(body))
 	if err != nil {
 		log.Fatalf("Upload failed: %v", err)
 	}
@@ -40,7 +40,7 @@ func main() {
 	fmt.Println("Code uploaded successfully!")
 
 	// Now start the enclave
-	respStart, err := http.Post("http://localhost:8080/start-enclave", "application/json", nil)
+	respStart, err := http.Post("http://192.168.0.248:8081/start-enclave", "application/json", nil)
 	if err != nil {
 		log.Fatalf("Failed to start enclave: %v", err)
 	}

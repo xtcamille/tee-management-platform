@@ -21,7 +21,9 @@ func Start(uploadedCodePath string) error {
 	}
 
 	// 1. Initialize
-	execCmd(enclaveDir, "occlum", "init")
+	if err := execCmd(enclaveDir, "occlum", "init"); err != nil {
+		return fmt.Errorf("occlum init failed: %v", err)
+	}
 
 	// 2. Build the Go enclave-app
 	// Note: We need to compile it for Linux/AMD64 since it runs inside Occlum (LibOS)
@@ -33,10 +35,14 @@ func Start(uploadedCodePath string) error {
 	}
 
 	// 3. Copy the Python code
-	execCmd(enclaveDir, "cp", uploadedCodePath, filepath.Join(enclaveDir, "image", "bin", "process.py"))
+	if err := execCmd(enclaveDir, "cp", uploadedCodePath, filepath.Join(enclaveDir, "image", "bin", "process.py")); err != nil {
+		return fmt.Errorf("copy uploaded code failed: %v", err)
+	}
 
 	// 4. Occlum Build
-	execCmd(enclaveDir, "occlum", "build")
+	if err := execCmd(enclaveDir, "occlum", "build"); err != nil {
+		return fmt.Errorf("occlum build failed: %v", err)
+	}
 
 	// 5. Run Enclave in Background
 	// For production, this would be managed by a service runner.
@@ -60,7 +66,7 @@ func execCmd(dir string, name string, args ...string) error {
 	cmd := exec.Command(name, args...)
 	cmd.Dir = dir
 	if out, err := cmd.CombinedOutput(); err != nil {
-		log.Printf("Command failed: %s %v, output: %s", name, args, string(out))
+		log.Printf("Command failed in %s: %s %v, err: %v, output: %s", dir, name, args, err, string(out))
 		return err
 	}
 	return nil
