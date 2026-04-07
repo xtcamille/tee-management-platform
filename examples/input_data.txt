@@ -1,0 +1,5 @@
+Hello from HyperEnclave.
+This data is being processed inside an Occlum TEE.
+Workflow test.
+12345
+67890

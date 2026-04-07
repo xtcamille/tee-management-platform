@@ -1,0 +1,25 @@
+package main
+
+import (
+	"log"
+	"net/http"
+	"tee-management-platform/enclave-manager/handler"
+)
+
+func main() {
+	mux := http.NewServeMux()
+
+	// Upload processing code (e.g., Python script)
+	mux.HandleFunc("/upload-code", handler.UploadCode)
+
+	// Start the Enclave with the uploaded code
+	mux.HandleFunc("/start-enclave", handler.StartEnclave)
+
+	// Send data to the running Enclave and get result
+	mux.HandleFunc("/process-data", handler.ProcessData)
+
+	log.Println("TEE Management Platform Server starting on :8080")
+	if err := http.ListenAndServe(":8080", mux); err != nil {
+		log.Fatalf("Server failed to start: %v", err)
+	}
+}
