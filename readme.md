@@ -1,5 +1,9 @@
 # TEE 管理平台工作流程
 
+![Gemini_Generated_Image_je7vc6je7vc6je7v](https://cdn.jsdelivr.net/gh/xtcamille/TyporaImages//img/20260407160226831.png)
+
+
+
 ## 流程说明
 
 1. **代码上传**：代码连接器将代码传入 TEE 管理平台
