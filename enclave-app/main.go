@@ -1,7 +1,7 @@
 package main
 
 import (
-	"context"
+	"bytes"
 	"crypto/tls"
 	"fmt"
 	"io"
@@ -17,6 +17,9 @@ import (
 
 const processScriptPath = "/bin/process.py"
 const pythonExecutionTimeout = 60 * time.Second
+const pythonPreflightTimeout = 10 * time.Second
+const commandProgressLogInterval = 5 * time.Second
+const maxLoggedOutputBytes = 512
 
 func main() {
 	log.Println("[Enclave App] Starting enclave application with RA-TLS")
@@ -116,6 +119,10 @@ func processWithPython(data []byte) ([]byte, error) {
 		log.Printf("[Enclave App] Python script is unavailable: script=%s err=%v", processScriptPath, err)
 		return nil, fmt.Errorf("python script not found: %w", err)
 	}
+	if err := runPythonPreflight(pythonPath); err != nil {
+		log.Printf("[Enclave App] Python interpreter preflight failed: %v", err)
+		return nil, err
+	}
 	log.Printf(
 		"[Enclave App] Executing Python script with interpreter=%s script=%s csv=%s input_bytes=%d",
 		pythonPath,
@@ -123,34 +130,18 @@ func processWithPython(data []byte) ([]byte, error) {
 		csvPath,
 		len(data),
 	)
-	ctx, cancel := context.WithTimeout(context.Background(), pythonExecutionTimeout)
-	defer cancel()
-
-	cmd := exec.CommandContext(ctx, pythonPath, processScriptPath, csvPath)
-	startedAt := time.Now()
-
-	output, err := cmd.CombinedOutput()
-	if ctx.Err() == context.DeadlineExceeded {
-		log.Printf(
-			"[Enclave App] Python script timed out after %s: interpreter=%s script=%s csv=%s partial_output=%s",
-			pythonExecutionTimeout,
-			pythonPath,
-			processScriptPath,
-			csvPath,
-			string(output),
-		)
-		return nil, fmt.Errorf("python script timed out after %s", pythonExecutionTimeout)
-	}
+	output, err := runCommandWithTimeout(
+		"[Enclave App] Python script",
+		pythonExecutionTimeout,
+		pythonPath,
+		processScriptPath,
+		csvPath,
+	)
 	if err != nil {
-		log.Printf(
-			"[Enclave App] Python script execution failed after %s: err=%v output=%s",
-			time.Since(startedAt),
-			err,
-			string(output),
-		)
+		log.Printf("[Enclave App] Python script execution failed: err=%v output=%s", err, truncateForLog(string(output)))
 		return nil, fmt.Errorf("python script failed: %v, output: %s", err, string(output))
 	}
-	log.Printf("[Enclave App] Python script completed successfully in %s: output_bytes=%d", time.Since(startedAt), len(output))
+	log.Printf("[Enclave App] Python script completed successfully: output_bytes=%d", len(output))
 
 	return output, err
 }
@@ -195,4 +186,92 @@ func discoverPythonPath() string {
 	}
 	log.Println("[Enclave App] Falling back to python3 from PATH")
 	return "python3"
+}
+
+func runPythonPreflight(pythonPath string) error {
+	log.Printf("[Enclave App] Running Python interpreter preflight: interpreter=%s", pythonPath)
+	output, err := runCommandWithTimeout(
+		"[Enclave App] Python preflight",
+		pythonPreflightTimeout,
+		pythonPath,
+		"-c",
+		`import sys; print("python preflight ok"); print(sys.version)`,
+	)
+	if err != nil {
+		return fmt.Errorf("python preflight failed: %w", err)
+	}
+	log.Printf("[Enclave App] Python interpreter preflight output: %s", truncateForLog(string(output)))
+	return nil
+}
+
+func runCommandWithTimeout(logPrefix string, timeout time.Duration, name string, args ...string) ([]byte, error) {
+	cmd := exec.Command(name, args...)
+	cmd.Env = append(os.Environ(),
+		"PYTHONUNBUFFERED=1",
+		"PYTHONDONTWRITEBYTECODE=1",
+	)
+
+	var combinedOutput bytes.Buffer
+	cmd.Stdout = &combinedOutput
+	cmd.Stderr = &combinedOutput
+
+	if err := cmd.Start(); err != nil {
+		return nil, fmt.Errorf("start command failed: %w", err)
+	}
+
+	pid := 0
+	if cmd.Process != nil {
+		pid = cmd.Process.Pid
+	}
+	log.Printf("%s started: pid=%d command=%s args=%v timeout=%s", logPrefix, pid, name, args, timeout)
+
+	done := make(chan error, 1)
+	go func() {
+		done <- cmd.Wait()
+	}()
+
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+
+	ticker := time.NewTicker(commandProgressLogInterval)
+	defer ticker.Stop()
+
+	startedAt := time.Now()
+
+	for {
+		select {
+		case err := <-done:
+			log.Printf("%s finished after %s: pid=%d", logPrefix, time.Since(startedAt), pid)
+			return combinedOutput.Bytes(), err
+		case <-ticker.C:
+			log.Printf(
+				"%s still running after %s: pid=%d partial_output=%s",
+				logPrefix,
+				time.Since(startedAt).Round(time.Second),
+				pid,
+				truncateForLog(combinedOutput.String()),
+			)
+		case <-timer.C:
+			killErr := error(nil)
+			if cmd.Process != nil {
+				killErr = cmd.Process.Kill()
+			}
+			log.Printf(
+				"%s timed out after %s: pid=%d kill_err=%v partial_output=%s",
+				logPrefix,
+				timeout,
+				pid,
+				killErr,
+				truncateForLog(combinedOutput.String()),
+			)
+			return combinedOutput.Bytes(), fmt.Errorf("command timed out after %s", timeout)
+		}
+	}
+}
+
+func truncateForLog(value string) string {
+	if len(value) <= maxLoggedOutputBytes {
+		return value
+	}
+	return value[:maxLoggedOutputBytes] + "...(truncated)"
 }
