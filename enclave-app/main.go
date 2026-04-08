@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"crypto/tls"
 	"fmt"
 	"io"
@@ -15,6 +16,7 @@ import (
 )
 
 const processScriptPath = "/bin/process.py"
+const pythonExecutionTimeout = 60 * time.Second
 
 func main() {
 	log.Println("[Enclave App] Starting enclave application with RA-TLS")
@@ -121,10 +123,24 @@ func processWithPython(data []byte) ([]byte, error) {
 		csvPath,
 		len(data),
 	)
-	cmd := exec.Command(pythonPath, processScriptPath, csvPath)
+	ctx, cancel := context.WithTimeout(context.Background(), pythonExecutionTimeout)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, pythonPath, processScriptPath, csvPath)
 	startedAt := time.Now()
 
 	output, err := cmd.CombinedOutput()
+	if ctx.Err() == context.DeadlineExceeded {
+		log.Printf(
+			"[Enclave App] Python script timed out after %s: interpreter=%s script=%s csv=%s partial_output=%s",
+			pythonExecutionTimeout,
+			pythonPath,
+			processScriptPath,
+			csvPath,
+			string(output),
+		)
+		return nil, fmt.Errorf("python script timed out after %s", pythonExecutionTimeout)
+	}
 	if err != nil {
 		log.Printf(
 			"[Enclave App] Python script execution failed after %s: err=%v output=%s",
