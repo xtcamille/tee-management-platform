@@ -37,8 +37,9 @@ func Start(uploadedCodePath string) error {
 	// Note: We need to compile it for Linux/AMD64 since it runs inside Occlum (LibOS)
 	// We'll assume the manager is running on the same platform as the enclave.
 	appPath := filepath.Join(enclaveDir, "image", "bin", "enclave-app")
-	log.Printf("[Occlum] Stage 2/5: building enclave app to %s", appPath)
-	cmdBuildApp := exec.Command("go", "build", "-o", appPath, "../../enclave-app/main.go")
+	sourcePath := "../enclave-app/main.go"
+	log.Printf("[Occlum] Stage 2/5: building enclave app from %s to %s", sourcePath, appPath)
+	cmdBuildApp := exec.Command("go", "build", "-x", "-o", appPath, sourcePath)
 	if out, err := cmdBuildApp.CombinedOutput(); err != nil {
 		return fmt.Errorf("failed to build enclave-app: %v, output: %s", err, string(out))
 	}
