@@ -16,6 +16,7 @@ import (
 )
 
 const processScriptPath = "/bin/process.py"
+const defaultPythonHome = "/opt/python-occlum"
 const pythonExecutionTimeout = 60 * time.Second
 const pythonPreflightTimeout = 10 * time.Second
 const commandProgressLogInterval = 5 * time.Second
@@ -189,7 +190,12 @@ func discoverPythonPath() string {
 }
 
 func runPythonPreflight(pythonPath string) error {
-	log.Printf("[Enclave App] Running Python interpreter preflight: interpreter=%s", pythonPath)
+	log.Printf(
+		"[Enclave App] Running Python interpreter preflight: interpreter=%s python_home=%s python_path=%s",
+		pythonPath,
+		resolvePythonHome(),
+		resolvePythonPath(),
+	)
 	output, err := runCommandWithTimeout(
 		"[Enclave App] Python preflight",
 		pythonPreflightTimeout,
@@ -206,10 +212,7 @@ func runPythonPreflight(pythonPath string) error {
 
 func runCommandWithTimeout(logPrefix string, timeout time.Duration, name string, args ...string) ([]byte, error) {
 	cmd := exec.Command(name, args...)
-	cmd.Env = append(os.Environ(),
-		"PYTHONUNBUFFERED=1",
-		"PYTHONDONTWRITEBYTECODE=1",
-	)
+	cmd.Env = buildPythonCommandEnv()
 
 	var combinedOutput bytes.Buffer
 	cmd.Stdout = &combinedOutput
@@ -223,7 +226,16 @@ func runCommandWithTimeout(logPrefix string, timeout time.Duration, name string,
 	if cmd.Process != nil {
 		pid = cmd.Process.Pid
 	}
-	log.Printf("%s started: pid=%d command=%s args=%v timeout=%s", logPrefix, pid, name, args, timeout)
+	log.Printf(
+		"%s started: pid=%d command=%s args=%v timeout=%s python_home=%s python_path=%s",
+		logPrefix,
+		pid,
+		name,
+		args,
+		timeout,
+		resolvePythonHome(),
+		resolvePythonPath(),
+	)
 
 	done := make(chan error, 1)
 	go func() {
@@ -274,4 +286,47 @@ func truncateForLog(value string) string {
 		return value
 	}
 	return value[:maxLoggedOutputBytes] + "...(truncated)"
+}
+
+func buildPythonCommandEnv() []string {
+	env := append([]string{}, os.Environ()...)
+	pythonHome := resolvePythonHome()
+	pythonPath := resolvePythonPath()
+	env = upsertEnv(env, "PYTHONHOME", pythonHome)
+	env = upsertEnv(env, "PYTHONPATH", pythonPath)
+	env = upsertEnv(env, "PYTHONUNBUFFERED", "1")
+	env = upsertEnv(env, "PYTHONDONTWRITEBYTECODE", "1")
+	return env
+}
+
+func resolvePythonHome() string {
+	if value := strings.TrimSpace(os.Getenv("PYTHONHOME")); value != "" {
+		return value
+	}
+	return defaultPythonHome
+}
+
+func resolvePythonPath() string {
+	if value := strings.TrimSpace(os.Getenv("PYTHONPATH")); value != "" {
+		return value
+	}
+
+	pythonHome := resolvePythonHome()
+	paths := []string{
+		filepath.Join(pythonHome, "lib", "python3.8"),
+		filepath.Join(pythonHome, "lib", "python3.8", "lib-dynload"),
+		filepath.Join(pythonHome, "lib", "python3.8", "site-packages"),
+	}
+	return strings.Join(paths, ":")
+}
+
+func upsertEnv(env []string, key string, value string) []string {
+	prefix := key + "="
+	for i, item := range env {
+		if strings.HasPrefix(item, prefix) {
+			env[i] = prefix + value
+			return env
+		}
+	}
+	return append(env, prefix+value)
 }
