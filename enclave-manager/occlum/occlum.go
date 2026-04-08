@@ -15,6 +15,7 @@ var enclaveDir string
 
 const defaultPythonHome = "/opt/python-occlum"
 const defaultPythonPath = "/opt/python-occlum/lib/python3.8:/opt/python-occlum/lib/python3.8/lib-dynload:/opt/python-occlum/lib/python3.8/site-packages"
+const defaultPythonInterpreter = "/usr/bin/python3.8"
 
 var pythonBOMCandidates = []string{
 	"/opt/occlum/etc/template/python-glibc.yaml",
@@ -148,9 +149,11 @@ func preparePythonRuntime(workspace string) error {
 		return err
 	}
 
-	if err := writePythonPathConfig(workspace, runtime.Executable); err != nil {
+	log.Printf("[Occlum] Host python runtime discovered: executable=%s lib_dirs=%v", runtime.Executable, runtime.LibDirs)
+	if err := writePythonPathConfig(workspace, defaultPythonInterpreter); err != nil {
 		return err
 	}
+	log.Printf("[Occlum] Wrote enclave Python interpreter config: %s", defaultPythonInterpreter)
 
 	if err := preparePythonRuntimeFromTemplate(workspace, runtime); err == nil {
 		log.Printf("[Occlum] Python runtime prepared from Occlum template successfully")

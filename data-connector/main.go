@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"tee-management-platform/internal/ratls"
+	"time"
 )
 
 func main() {
@@ -45,6 +46,7 @@ func main() {
 	}
 
 	client := &http.Client{
+		Timeout: 30 * time.Second,
 		Transport: &http.Transport{
 			TLSClientConfig: tlsConfig,
 		},

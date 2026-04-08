@@ -16,7 +16,8 @@ import (
 )
 
 const processScriptPath = "/bin/process.py"
-const defaultPythonHome = "/opt/python-occlum"
+const defaultPythonHome = "/root/occlum/demos/python-occlum"
+const defaultPythonInterpreter = "/root/occlum/demos/python-occlum/bin/python3.8"
 const pythonExecutionTimeout = 60 * time.Second
 const pythonPreflightTimeout = 10 * time.Second
 const commandProgressLogInterval = 5 * time.Second
@@ -190,29 +191,52 @@ func discoverPythonPath() string {
 }
 
 func runPythonPreflight(pythonPath string) error {
+	pythonHome := resolvePythonHome()
+	pythonPathEnv := resolvePythonPath()
 	log.Printf(
 		"[Enclave App] Running Python interpreter preflight: interpreter=%s python_home=%s python_path=%s",
 		pythonPath,
-		resolvePythonHome(),
-		resolvePythonPath(),
+		pythonHome,
+		pythonPathEnv,
 	)
-	output, err := runCommandWithTimeout(
-		"[Enclave App] Python preflight",
+
+	minimalOutput, err := runCommandWithEnvTimeout(
+		"[Enclave App] Python preflight (minimal)",
 		pythonPreflightTimeout,
+		minimalPythonCommandEnv(),
 		pythonPath,
+		"-E",
+		"-S",
 		"-c",
-		`import sys; print("python preflight ok"); print(sys.version)`,
+		`import sys; print("python preflight minimal ok"); print(sys.executable); print(sys.version)`,
 	)
 	if err != nil {
-		return fmt.Errorf("python preflight failed: %w", err)
+		return fmt.Errorf("python minimal preflight failed: interpreter=%s python_home=%s python_path=%s err=%w", pythonPath, pythonHome, pythonPathEnv, err)
 	}
-	log.Printf("[Enclave App] Python interpreter preflight output: %s", truncateForLog(string(output)))
+	log.Printf("[Enclave App] Python interpreter minimal preflight output: %s", truncateForLog(string(minimalOutput)))
+
+	envOutput, err := runCommandWithEnvTimeout(
+		"[Enclave App] Python preflight (env)",
+		pythonPreflightTimeout,
+		buildPythonCommandEnv(),
+		pythonPath,
+		"-c",
+		`import os, sys; print("python preflight env ok"); print(sys.executable); print(sys.version); print("PYTHONHOME=" + os.environ.get("PYTHONHOME", "")); print("PYTHONPATH=" + os.environ.get("PYTHONPATH", "")); print("sys.path=" + repr(sys.path))`,
+	)
+	if err != nil {
+		return fmt.Errorf("python env preflight failed: interpreter=%s python_home=%s python_path=%s err=%w", pythonPath, pythonHome, pythonPathEnv, err)
+	}
+	log.Printf("[Enclave App] Python interpreter env preflight output: %s", truncateForLog(string(envOutput)))
 	return nil
 }
 
 func runCommandWithTimeout(logPrefix string, timeout time.Duration, name string, args ...string) ([]byte, error) {
+	return runCommandWithEnvTimeout(logPrefix, timeout, buildPythonCommandEnv(), name, args...)
+}
+
+func runCommandWithEnvTimeout(logPrefix string, timeout time.Duration, env []string, name string, args ...string) ([]byte, error) {
 	cmd := exec.Command(name, args...)
-	cmd.Env = buildPythonCommandEnv()
+	cmd.Env = env
 
 	var combinedOutput bytes.Buffer
 	cmd.Stdout = &combinedOutput
@@ -292,8 +316,25 @@ func buildPythonCommandEnv() []string {
 	env := append([]string{}, os.Environ()...)
 	pythonHome := resolvePythonHome()
 	pythonPath := resolvePythonPath()
-	env = upsertEnv(env, "PYTHONHOME", pythonHome)
-	env = upsertEnv(env, "PYTHONPATH", pythonPath)
+	if !pathExists(pythonHome) {
+		log.Printf("[Enclave App] Warning: configured PYTHONHOME does not exist: %s", pythonHome)
+	} else {
+		env = upsertEnv(env, "PYTHONHOME", pythonHome)
+	}
+	if missing := missingPythonPathEntries(pythonPath); len(missing) > 0 {
+		log.Printf("[Enclave App] Warning: configured PYTHONPATH contains missing entries: %s", strings.Join(missing, ", "))
+	} else {
+		env = upsertEnv(env, "PYTHONPATH", pythonPath)
+	}
+	env = upsertEnv(env, "PYTHONUNBUFFERED", "1")
+	env = upsertEnv(env, "PYTHONDONTWRITEBYTECODE", "1")
+	return env
+}
+
+func minimalPythonCommandEnv() []string {
+	env := append([]string{}, os.Environ()...)
+	env = removeEnv(env, "PYTHONHOME")
+	env = removeEnv(env, "PYTHONPATH")
 	env = upsertEnv(env, "PYTHONUNBUFFERED", "1")
 	env = upsertEnv(env, "PYTHONDONTWRITEBYTECODE", "1")
 	return env
@@ -329,4 +370,34 @@ func upsertEnv(env []string, key string, value string) []string {
 		}
 	}
 	return append(env, prefix+value)
+}
+
+func removeEnv(env []string, key string) []string {
+	prefix := key + "="
+	filtered := env[:0]
+	for _, item := range env {
+		if !strings.HasPrefix(item, prefix) {
+			filtered = append(filtered, item)
+		}
+	}
+	return filtered
+}
+
+func missingPythonPathEntries(value string) []string {
+	missing := make([]string, 0)
+	for _, entry := range strings.Split(value, ":") {
+		entry = strings.TrimSpace(entry)
+		if entry == "" {
+			continue
+		}
+		if !pathExists(entry) {
+			missing = append(missing, entry)
+		}
+	}
+	return missing
+}
+
+func pathExists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
 }
