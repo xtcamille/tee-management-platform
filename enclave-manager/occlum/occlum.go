@@ -13,6 +13,9 @@ import (
 
 var enclaveDir string
 
+const defaultPythonHome = "/opt/python-occlum"
+const defaultPythonPath = "/opt/python-occlum/lib/python3.8:/opt/python-occlum/lib/python3.8/lib-dynload:/opt/python-occlum/lib/python3.8/site-packages"
+
 var pythonBOMCandidates = []string{
 	"/opt/occlum/etc/template/python-glibc.yaml",
 	"/opt/occlum/etc/template/python_glibc.yaml",
@@ -336,6 +339,7 @@ func tuneOcclumConfig(workspace string) error {
 
 	resourceLimits := ensureMap(config, "resource_limits")
 	process := ensureMap(config, "process")
+	envConfig := ensureMap(config, "env")
 
 	// Go reserves a large virtual address space during runtime bootstrap.
 	// Occlum defaults are often too small, which triggers
@@ -344,6 +348,13 @@ func tuneOcclumConfig(workspace string) error {
 	ensureMinInt(resourceLimits, "max_num_of_threads", 128)
 	ensureMinSize(process, "default_heap_size", "512MB")
 	ensureMinSize(process, "default_mmap_size", "1024MB")
+	ensureStringListContains(config, "entry_points", "/bin")
+	ensureStringListContains(config, "entry_points", "/usr/bin")
+	ensureStringListContains(config, "entry_points", "/usr/local/bin")
+	ensureStringListContains(config, "entry_points", "/opt/python-occlum/bin")
+	ensureStringListContains(envConfig, "default", "OCCLUM=yes")
+	ensureStringListContains(envConfig, "default", "PYTHONHOME="+defaultPythonHome)
+	ensureStringListContains(envConfig, "default", "PYTHONPATH="+defaultPythonPath)
 
 	updated, err := json.MarshalIndent(config, "", "  ")
 	if err != nil {
@@ -355,10 +366,12 @@ func tuneOcclumConfig(workspace string) error {
 	}
 
 	log.Printf(
-		"[Occlum] Tuned Occlum.json: resource_limits.user_space_size=%v process.default_heap_size=%v process.default_mmap_size=%v",
+		"[Occlum] Tuned Occlum.json: resource_limits.user_space_size=%v process.default_heap_size=%v process.default_mmap_size=%v entry_points=%v env.default=%v",
 		resourceLimits["user_space_size"],
 		process["default_heap_size"],
 		process["default_mmap_size"],
+		config["entry_points"],
+		envConfig["default"],
 	)
 	return nil
 }
@@ -385,6 +398,29 @@ func ensureMinSize(parent map[string]any, key string, minValue string) {
 		return
 	}
 	parent[key] = minValue
+}
+
+func ensureStringListContains(parent map[string]any, key string, value string) {
+	current := make([]string, 0)
+	switch values := parent[key].(type) {
+	case []string:
+		current = append(current, values...)
+	case []any:
+		for _, item := range values {
+			if s, ok := item.(string); ok {
+				current = append(current, s)
+			}
+		}
+	}
+
+	for _, item := range current {
+		if item == value {
+			parent[key] = current
+			return
+		}
+	}
+	current = append(current, value)
+	parent[key] = current
 }
 
 func toInt64(value any) (int64, bool) {
