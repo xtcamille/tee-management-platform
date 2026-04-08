@@ -1,0 +1,11 @@
+id,name,gender,age,class,major,phone,email
+1,张伟,男,20,2024-01,计算机科学,13800138001,zhangwei@example.com
+2,李娜,女,21,2024-01,计算机科学,13800138002,lina@example.com
+3,王强,男,19,2024-02,软件工程,13800138003,wangqiang@example.com
+4,刘洋,女,20,2024-02,软件工程,13800138004,liuyang@example.com
+5,陈明,男,22,2024-03,人工智能,13800138005,chenming@example.com
+6,赵雪,女,21,2024-03,人工智能,13800138006,zhaoxue@example.com
+7,孙浩,男,20,2024-01,计算机科学,13800138007,sunhao@example.com
+8,周婷,女,19,2024-02,软件工程,13800138008,zhouting@example.com
+9,吴杰,男,21,2024-03,人工智能,13800138009,wujie@example.com
+10,郑芳,女,20,2024-01,计算机科学,13800138010,zhengfang@example.com
