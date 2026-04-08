@@ -40,6 +40,11 @@ func Start(uploadedCodePath string) error {
 	sourcePath := "../enclave-app/main.go"
 	log.Printf("[Occlum] Stage 2/5: building enclave app from %s to %s", sourcePath, appPath)
 	cmdBuildApp := exec.Command("go", "build", "-x", "-o", appPath, sourcePath)
+	cmdBuildApp.Env = append(os.Environ(),
+		"GOOS=linux",
+		"GOARCH=amd64",
+		"CGO_ENABLED=0",
+	)
 	if out, err := cmdBuildApp.CombinedOutput(); err != nil {
 		return fmt.Errorf("failed to build enclave-app: %v, output: %s", err, string(out))
 	}
