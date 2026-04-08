@@ -39,7 +39,7 @@ func Start(uploadedCodePath string) error {
 	appPath := filepath.Join(enclaveDir, "image", "bin", "enclave-app")
 	sourcePath := "../enclave-app/main.go"
 	log.Printf("[Occlum] Stage 2/5: building enclave app from %s to %s", sourcePath, appPath)
-	cmdBuildApp := exec.Command("go", "build", "-x", "-o", appPath, sourcePath)
+	cmdBuildApp := exec.Command("go", "build", "-x", "-buildmode=pie", "-o", appPath, sourcePath)
 	cmdBuildApp.Env = append(os.Environ(),
 		"GOOS=linux",
 		"GOARCH=amd64",
