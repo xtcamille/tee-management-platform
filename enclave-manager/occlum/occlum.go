@@ -13,6 +13,17 @@ import (
 
 var enclaveDir string
 
+var pythonBOMCandidates = []string{
+	"/opt/occlum/etc/template/python-glibc.yaml",
+	"/opt/occlum/etc/template/python_glibc.yaml",
+	"/opt/occlum/etc/template/python.yaml",
+	"/opt/occlum/etc/template/python3.yaml",
+	"/opt/occlum/etc/template/python3.8.yaml",
+	"/opt/occlum/etc/template/bom/python-glibc.yaml",
+	"/opt/occlum/etc/template/bom/python_glibc.yaml",
+	"/opt/occlum/etc/template/bom/python.yaml",
+}
+
 func Start(uploadedCodePath string) error {
 	enclaveDir = "/tmp/occlum_workspace"
 	log.Printf("[Occlum] Starting enclave setup. workspace=%s uploadedCodePath=%s", enclaveDir, uploadedCodePath)
@@ -134,11 +145,15 @@ func preparePythonRuntime(workspace string) error {
 		return err
 	}
 
-	if err := os.MkdirAll(filepath.Join(workspace, "image", "etc"), 0755); err != nil {
+	if err := writePythonPathConfig(workspace, runtime.Executable); err != nil {
 		return err
 	}
-	if err := os.WriteFile(filepath.Join(workspace, "image", "etc", "python3_path"), []byte(runtime.Executable+"\n"), 0644); err != nil {
-		return err
+
+	if err := preparePythonRuntimeFromTemplate(workspace, runtime); err == nil {
+		log.Printf("[Occlum] Python runtime prepared from Occlum template successfully")
+		return nil
+	} else {
+		log.Printf("[Occlum] Occlum Python template path not available or failed, falling back to manual runtime copy: %v", err)
 	}
 
 	bomPath := filepath.Join(workspace, "python-runtime.yaml")
@@ -157,6 +172,74 @@ func preparePythonRuntime(workspace string) error {
 		return err
 	}
 	return nil
+}
+
+func writePythonPathConfig(workspace string, executable string) error {
+	if err := os.MkdirAll(filepath.Join(workspace, "image", "etc"), 0755); err != nil {
+		return err
+	}
+	if err := os.WriteFile(filepath.Join(workspace, "image", "etc", "python3_path"), []byte(executable+"\n"), 0644); err != nil {
+		return err
+	}
+	return nil
+}
+
+func preparePythonRuntimeFromTemplate(workspace string, runtime *pythonRuntime) error {
+	if _, err := exec.LookPath("copy_bom"); err != nil {
+		return fmt.Errorf("copy_bom not found on host: %v", err)
+	}
+
+	bomPath, err := findPythonBOMTemplate()
+	if err != nil {
+		return err
+	}
+
+	log.Printf("[Occlum] Preparing Python runtime from Occlum template: template=%s executable=%s", bomPath, runtime.Executable)
+	if err := execCmd(
+		workspace,
+		"copy_bom",
+		"--file", bomPath,
+		"--root", "image",
+		"--include-dir", "/opt/occlum/etc/template",
+	); err != nil {
+		return fmt.Errorf("copy_bom with Occlum Python template failed: %w", err)
+	}
+
+	// Keep the uploaded script workflow consistent by ensuring the host interpreter
+	// path is also present in the image when the template does not include it.
+	hostExecutableDir := filepath.Dir(runtime.Executable)
+	if pathExists(hostExecutableDir) {
+		extraBOMPath := filepath.Join(workspace, "python-runtime-exec.yaml")
+		if err := os.WriteFile(extraBOMPath, []byte(renderPythonExecutableBOM(runtime.Executable)), 0644); err != nil {
+			return err
+		}
+		if err := execCmd(
+			workspace,
+			"copy_bom",
+			"--file", extraBOMPath,
+			"--root", "image",
+			"--include-dir", "/opt/occlum/etc/template",
+		); err != nil {
+			return fmt.Errorf("copy_bom for host python executable failed: %w", err)
+		}
+	}
+	return nil
+}
+
+func findPythonBOMTemplate() (string, error) {
+	if override := strings.TrimSpace(os.Getenv("OCCLUM_PYTHON_BOM")); override != "" {
+		if pathExists(override) {
+			return override, nil
+		}
+		return "", fmt.Errorf("OCCLUM_PYTHON_BOM is set but file does not exist: %s", override)
+	}
+
+	for _, candidate := range pythonBOMCandidates {
+		if pathExists(candidate) {
+			return candidate, nil
+		}
+	}
+	return "", fmt.Errorf("no Occlum Python BOM template found in known locations")
 }
 
 func discoverPythonRuntime() (*pythonRuntime, error) {
@@ -212,6 +295,16 @@ func renderPythonRuntimeBOM(runtime *pythonRuntime) string {
 	for _, dir := range libDirs {
 		builder.WriteString(fmt.Sprintf("          - %s\n", dir))
 	}
+	return builder.String()
+}
+
+func renderPythonExecutableBOM(executable string) string {
+	var builder strings.Builder
+	builder.WriteString("targets:\n")
+	builder.WriteString("  - target: /\n")
+	builder.WriteString("    copy:\n")
+	builder.WriteString("      - files:\n")
+	builder.WriteString(fmt.Sprintf("          - %s\n", executable))
 	return builder.String()
 }
 
