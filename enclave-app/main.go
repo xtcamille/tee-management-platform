@@ -11,7 +11,10 @@ import (
 	"path/filepath"
 	"strings"
 	"tee-management-platform/internal/ratls"
+	"time"
 )
+
+const processScriptPath = "/bin/process.py"
 
 func main() {
 	log.Println("[Enclave App] Starting enclave application with RA-TLS")
@@ -47,13 +50,22 @@ func main() {
 }
 
 func handleSecureData(w http.ResponseWriter, r *http.Request) {
+	startedAt := time.Now()
+
 	if r.Method != http.MethodPost {
 		log.Printf("[Enclave App] Rejected request: method=%s path=%s remote=%s", r.Method, r.URL.Path, r.RemoteAddr)
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 
-	log.Printf("[Enclave App] Received secure request: method=%s path=%s remote=%s", r.Method, r.URL.Path, r.RemoteAddr)
+	log.Printf(
+		"[Enclave App] Received secure request: method=%s path=%s remote=%s content_type=%s content_length=%d",
+		r.Method,
+		r.URL.Path,
+		r.RemoteAddr,
+		r.Header.Get("Content-Type"),
+		r.ContentLength,
+	)
 
 	// Read and process data
 	data, err := io.ReadAll(r.Body)
@@ -78,10 +90,12 @@ func handleSecureData(w http.ResponseWriter, r *http.Request) {
 		log.Printf("[Enclave App] Failed to write response body: err=%v", err)
 		return
 	}
-	log.Printf("[Enclave App] Successfully returned %d bytes", len(result))
+	log.Printf("[Enclave App] Successfully returned %d bytes in %s", len(result), time.Since(startedAt))
 }
 
 func processWithPython(data []byte) ([]byte, error) {
+	log.Printf("[Enclave App] Starting Python processing pipeline for %d input bytes", len(data))
+
 	csvPath, err := writeCSVInput(data)
 	if err != nil {
 		log.Printf("[Enclave App] Failed to persist CSV input: %v", err)
@@ -90,24 +104,37 @@ func processWithPython(data []byte) ([]byte, error) {
 	defer func() {
 		if err := os.Remove(csvPath); err != nil {
 			log.Printf("[Enclave App] Failed to remove temporary CSV file %s: %v", csvPath, err)
+			return
 		}
+		log.Printf("[Enclave App] Removed temporary CSV file %s", csvPath)
 	}()
 
 	pythonPath := discoverPythonPath()
+	if _, err := os.Stat(processScriptPath); err != nil {
+		log.Printf("[Enclave App] Python script is unavailable: script=%s err=%v", processScriptPath, err)
+		return nil, fmt.Errorf("python script not found: %w", err)
+	}
 	log.Printf(
-		"[Enclave App] Executing Python script with interpreter=%s script=/bin/process.py csv=%s input_bytes=%d",
+		"[Enclave App] Executing Python script with interpreter=%s script=%s csv=%s input_bytes=%d",
 		pythonPath,
+		processScriptPath,
 		csvPath,
 		len(data),
 	)
-	cmd := exec.Command(pythonPath, "/bin/process.py", csvPath)
+	cmd := exec.Command(pythonPath, processScriptPath, csvPath)
+	startedAt := time.Now()
 
 	output, err := cmd.CombinedOutput()
 	if err != nil {
-		log.Printf("[Enclave App] Python script execution failed: err=%v output=%s", err, string(output))
+		log.Printf(
+			"[Enclave App] Python script execution failed after %s: err=%v output=%s",
+			time.Since(startedAt),
+			err,
+			string(output),
+		)
 		return nil, fmt.Errorf("python script failed: %v, output: %s", err, string(output))
 	}
-	log.Printf("[Enclave App] Python script completed successfully: output_bytes=%d", len(output))
+	log.Printf("[Enclave App] Python script completed successfully in %s: output_bytes=%d", time.Since(startedAt), len(output))
 
 	return output, err
 }
@@ -127,7 +154,7 @@ func writeCSVInput(data []byte) (string, error) {
 	}
 
 	csvPath := tempFile.Name()
-	log.Printf("[Enclave App] Stored secure CSV input at %s", filepath.Clean(csvPath))
+	log.Printf("[Enclave App] Stored secure CSV input at %s (%d bytes)", filepath.Clean(csvPath), len(data))
 	return csvPath, nil
 }
 
@@ -138,6 +165,9 @@ func discoverPythonPath() string {
 			log.Printf("[Enclave App] Using configured Python interpreter: %s", path)
 			return path
 		}
+		log.Println("[Enclave App] /etc/python3_path exists but is empty, trying fallback locations")
+	} else {
+		log.Printf("[Enclave App] Unable to read /etc/python3_path, trying fallback locations: %v", err)
 	}
 
 	// Fall back to common interpreter locations if the config file is missing.
