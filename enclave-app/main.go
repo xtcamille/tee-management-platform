@@ -6,7 +6,9 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"os"
 	"os/exec"
+	"strings"
 	"tee-management-platform/internal/ratls"
 )
 
@@ -70,7 +72,8 @@ func handleSecureData(w http.ResponseWriter, r *http.Request) {
 
 func processWithPython(data []byte) ([]byte, error) {
 	// Call the uploaded process.py (it should be at /bin/process.py inside Occlum)
-	cmd := exec.Command("python3", "/bin/process.py")
+	pythonPath := discoverPythonPath()
+	cmd := exec.Command(pythonPath, "/bin/process.py")
 
 	// Set stdin to the received data
 	stdinPipe, err := cmd.StdinPipe()
@@ -89,4 +92,21 @@ func processWithPython(data []byte) ([]byte, error) {
 	}
 
 	return output, err
+}
+
+func discoverPythonPath() string {
+	configuredPath, err := os.ReadFile("/etc/python3_path")
+	if err == nil {
+		if path := strings.TrimSpace(string(configuredPath)); path != "" {
+			return path
+		}
+	}
+
+	// Fall back to common interpreter locations if the config file is missing.
+	for _, candidate := range []string{"/usr/bin/python3", "/usr/local/bin/python3", "/bin/python3", "python3"} {
+		if _, err := os.Stat(candidate); err == nil || candidate == "python3" {
+			return candidate
+		}
+	}
+	return "python3"
 }

@@ -18,7 +18,7 @@ func main() {
 	}
 
 	dataPath := os.Args[1]
-	enclaveAddr := "localhost:8443" // Default to local enclave
+	enclaveAddr := "192.168.0.248:8443" // Default to local enclave
 	if len(os.Args) > 2 {
 		enclaveAddr = os.Args[2]
 	}

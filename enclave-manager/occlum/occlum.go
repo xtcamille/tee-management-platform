@@ -37,6 +37,9 @@ func Start(uploadedCodePath string) error {
 	if err := tuneOcclumConfig(enclaveDir); err != nil {
 		return fmt.Errorf("failed to tune Occlum.json: %v", err)
 	}
+	if err := preparePythonRuntime(enclaveDir); err != nil {
+		return fmt.Errorf("failed to prepare Python runtime: %v", err)
+	}
 	log.Printf("[Occlum] Stage 1/5 completed: Occlum workspace initialized")
 
 	// 2. Build the Go enclave-app
@@ -118,6 +121,112 @@ func buildEnclaveApp(sourcePath string, appPath string) error {
 		return fmt.Errorf("%s %v failed: %v, output: %s", buildTool, buildArgs, err, string(out))
 	}
 	return nil
+}
+
+type pythonRuntime struct {
+	Executable string   `json:"executable"`
+	LibDirs    []string `json:"lib_dirs"`
+}
+
+func preparePythonRuntime(workspace string) error {
+	runtime, err := discoverPythonRuntime()
+	if err != nil {
+		return err
+	}
+
+	if err := os.MkdirAll(filepath.Join(workspace, "image", "etc"), 0755); err != nil {
+		return err
+	}
+	if err := os.WriteFile(filepath.Join(workspace, "image", "etc", "python3_path"), []byte(runtime.Executable+"\n"), 0644); err != nil {
+		return err
+	}
+
+	bomPath := filepath.Join(workspace, "python-runtime.yaml")
+	if err := os.WriteFile(bomPath, []byte(renderPythonRuntimeBOM(runtime)), 0644); err != nil {
+		return err
+	}
+
+	log.Printf("[Occlum] Copying Python runtime into Occlum image: executable=%s lib_dirs=%v", runtime.Executable, runtime.LibDirs)
+	if err := execCmd(
+		workspace,
+		"copy_bom",
+		"--file", bomPath,
+		"--root", "image",
+		"--include-dir", "/opt/occlum/etc/template",
+	); err != nil {
+		return err
+	}
+	return nil
+}
+
+func discoverPythonRuntime() (*pythonRuntime, error) {
+	if _, err := exec.LookPath("python3"); err != nil {
+		return nil, fmt.Errorf("python3 not found on host: %v", err)
+	}
+	if _, err := exec.LookPath("copy_bom"); err != nil {
+		return nil, fmt.Errorf("copy_bom not found on host: %v", err)
+	}
+
+	script := strings.Join([]string{
+		"import json, os, sys, sysconfig",
+		`paths = []`,
+		`for key in ("stdlib", "platstdlib", "purelib", "platlib"):`,
+		`    value = sysconfig.get_path(key)`,
+		`    if value and os.path.isdir(value) and value not in paths:`,
+		`        paths.append(value)`,
+		`print(json.dumps({"executable": os.path.realpath(sys.executable), "lib_dirs": paths}))`,
+	}, "\n")
+
+	cmd := exec.Command("python3", "-c", script)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return nil, fmt.Errorf("failed to inspect host python3 runtime: %v, output: %s", err, string(out))
+	}
+
+	var runtime pythonRuntime
+	if err := json.Unmarshal(out, &runtime); err != nil {
+		return nil, fmt.Errorf("failed to parse host python3 runtime info: %v, output: %s", err, string(out))
+	}
+	if runtime.Executable == "" {
+		return nil, fmt.Errorf("host python3 inspection returned empty executable path")
+	}
+	if len(runtime.LibDirs) == 0 {
+		return nil, fmt.Errorf("host python3 inspection returned no library directories")
+	}
+	return &runtime, nil
+}
+
+func renderPythonRuntimeBOM(runtime *pythonRuntime) string {
+	libDirs := append([]string{}, runtime.LibDirs...)
+	if !containsString(libDirs, "/etc/python3") && pathExists("/etc/python3") {
+		libDirs = append(libDirs, "/etc/python3")
+	}
+
+	var builder strings.Builder
+	builder.WriteString("targets:\n")
+	builder.WriteString("  - target: /\n")
+	builder.WriteString("    copy:\n")
+	builder.WriteString("      - files:\n")
+	builder.WriteString(fmt.Sprintf("          - %s\n", runtime.Executable))
+	builder.WriteString("      - dirs:\n")
+	for _, dir := range libDirs {
+		builder.WriteString(fmt.Sprintf("          - %s\n", dir))
+	}
+	return builder.String()
+}
+
+func pathExists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
+}
+
+func containsString(values []string, target string) bool {
+	for _, value := range values {
+		if value == target {
+			return true
+		}
+	}
+	return false
 }
 
 func tuneOcclumConfig(workspace string) error {
