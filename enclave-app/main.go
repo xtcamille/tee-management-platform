@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"tee-management-platform/internal/ratls"
 )
@@ -81,24 +82,25 @@ func handleSecureData(w http.ResponseWriter, r *http.Request) {
 }
 
 func processWithPython(data []byte) ([]byte, error) {
-	// Call the uploaded process.py (it should be at /bin/process.py inside Occlum)
-	pythonPath := discoverPythonPath()
-	log.Printf("[Enclave App] Executing Python script with interpreter=%s script=/bin/process.py input_bytes=%d", pythonPath, len(data))
-	cmd := exec.Command(pythonPath, "/bin/process.py")
-
-	// Set stdin to the received data
-	stdinPipe, err := cmd.StdinPipe()
+	csvPath, err := writeCSVInput(data)
 	if err != nil {
-		log.Printf("[Enclave App] Failed to open stdin pipe for Python process: %v", err)
+		log.Printf("[Enclave App] Failed to persist CSV input: %v", err)
 		return nil, err
 	}
-
-	go func() {
-		defer stdinPipe.Close()
-		if _, err := stdinPipe.Write(data); err != nil {
-			log.Printf("[Enclave App] Failed to write %d bytes to Python stdin: %v", len(data), err)
+	defer func() {
+		if err := os.Remove(csvPath); err != nil {
+			log.Printf("[Enclave App] Failed to remove temporary CSV file %s: %v", csvPath, err)
 		}
 	}()
+
+	pythonPath := discoverPythonPath()
+	log.Printf(
+		"[Enclave App] Executing Python script with interpreter=%s script=/bin/process.py csv=%s input_bytes=%d",
+		pythonPath,
+		csvPath,
+		len(data),
+	)
+	cmd := exec.Command(pythonPath, "/bin/process.py", csvPath)
 
 	output, err := cmd.CombinedOutput()
 	if err != nil {
@@ -108,6 +110,25 @@ func processWithPython(data []byte) ([]byte, error) {
 	log.Printf("[Enclave App] Python script completed successfully: output_bytes=%d", len(output))
 
 	return output, err
+}
+
+func writeCSVInput(data []byte) (string, error) {
+	tempFile, err := os.CreateTemp("", "secure-input-*.csv")
+	if err != nil {
+		return "", fmt.Errorf("create temp csv file failed: %w", err)
+	}
+
+	if _, err := tempFile.Write(data); err != nil {
+		tempFile.Close()
+		return "", fmt.Errorf("write temp csv file failed: %w", err)
+	}
+	if err := tempFile.Close(); err != nil {
+		return "", fmt.Errorf("close temp csv file failed: %w", err)
+	}
+
+	csvPath := tempFile.Name()
+	log.Printf("[Enclave App] Stored secure CSV input at %s", filepath.Clean(csvPath))
+	return csvPath, nil
 }
 
 func discoverPythonPath() string {
