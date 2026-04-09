@@ -45,7 +45,7 @@ func Start(uploadedCodePath string) error {
 	log.Printf("[Occlum] Stage 1/4 completed: Occlum workspace initialized")
 
 	appPath := filepath.Join(enclaveDir, "image", "bin", "enclave-app")
-	uploadedCodePath = "/zxt/tee-management-platform/enclave-app/enclave-app"
+	// uploadedCodePath = "/zxt/tee-management-platform/enclave-app/enclave-app"
 	log.Printf("[Occlum] Stage 2/4: copying uploaded enclave app from %s to %s", uploadedCodePath, appPath)
 	if err := execCmd(enclaveDir, "cp", uploadedCodePath, appPath); err != nil {
 		return fmt.Errorf("failed to copy enclave-app binary: %v", err)
@@ -264,6 +264,13 @@ func validateELF(path string) error {
 	// Typically on x86-64 it's 0x3e 0x00.
 	if header[18] != 0x3e || header[19] != 0x00 {
 		return fmt.Errorf("invalid architecture: expected x86-64 (0x3e), got 0x%02x%02x", header[18], header[19])
+	}
+
+	// 3. Check ELF type (e_type at offset 16)
+	// ET_DYN = 0x03 (Shared object file / PIE)
+	// Occlum requires PIE executables, which are ET_DYN.
+	if header[16] != 0x03 || header[17] != 0x00 {
+		return fmt.Errorf("invalid ELF type: expected ET_DYN (0x03) for PIE, got 0x%02x%02x. Please compile with -buildmode=pie", header[16], header[17])
 	}
 
 	return nil
