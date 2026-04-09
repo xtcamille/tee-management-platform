@@ -14,6 +14,7 @@ import (
 var enclaveDir string
 
 const defaultPythonHome = "/opt/python-occlum"
+const defaultGlibcLibraryPath = "/lib:/lib64:/usr/lib:/usr/lib/x86_64-linux-gnu:/lib/x86_64-linux-gnu"
 
 var pythonBOMCandidates = []string{
 	"/opt/occlum/etc/template/python-glibc.yaml",
@@ -351,6 +352,11 @@ func renderPythonRuntimeBOM(runtime *pythonRuntime) string {
 	if !containsString(libDirs, "/etc/python3") && pathExists("/etc/python3") {
 		libDirs = append(libDirs, "/etc/python3")
 	}
+	for _, dir := range extraRuntimeDirs(runtime) {
+		if !containsString(libDirs, dir) && pathExists(dir) {
+			libDirs = append(libDirs, dir)
+		}
+	}
 
 	var builder strings.Builder
 	builder.WriteString("targets:\n")
@@ -358,13 +364,14 @@ func renderPythonRuntimeBOM(runtime *pythonRuntime) string {
 	builder.WriteString("    copy:\n")
 	builder.WriteString("      - files:\n")
 	builder.WriteString(fmt.Sprintf("          - %s\n", runtime.Executable))
-	if runtime.Home != "" && pathExists(runtime.Home) {
-		builder.WriteString("      - dirs:\n")
-		builder.WriteString(fmt.Sprintf("          - %s\n", runtime.Home))
-		return builder.String()
-	}
 	builder.WriteString("      - dirs:\n")
+	if runtime.Home != "" && pathExists(runtime.Home) {
+		builder.WriteString(fmt.Sprintf("          - %s\n", runtime.Home))
+	}
 	for _, dir := range libDirs {
+		if runtime.Home != "" && dir == runtime.Home {
+			continue
+		}
 		builder.WriteString(fmt.Sprintf("          - %s\n", dir))
 	}
 	return builder.String()
@@ -394,6 +401,33 @@ func containsString(values []string, target string) bool {
 	return false
 }
 
+func extraRuntimeDirs(runtime *pythonRuntime) []string {
+	dirs := []string{
+		"/lib",
+		"/lib64",
+		"/usr/lib",
+		"/usr/lib/x86_64-linux-gnu",
+		"/lib/x86_64-linux-gnu",
+	}
+	if runtime.Home != "" && !containsString(dirs, runtime.Home) {
+		dirs = append(dirs, runtime.Home)
+	}
+	return dirs
+}
+
+func buildLibraryPath(runtime *pythonRuntime) string {
+	paths := make([]string, 0)
+	for _, dir := range append(extraRuntimeDirs(runtime), runtime.LibDirs...) {
+		if pathExists(dir) && !containsString(paths, dir) {
+			paths = append(paths, dir)
+		}
+	}
+	if len(paths) == 0 {
+		return defaultGlibcLibraryPath
+	}
+	return strings.Join(paths, ":")
+}
+
 func tuneOcclumConfig(workspace string, runtime *pythonRuntime) error {
 	configPath := filepath.Join(workspace, "Occlum.json")
 	raw, err := os.ReadFile(configPath)
@@ -420,11 +454,11 @@ func tuneOcclumConfig(workspace string, runtime *pythonRuntime) error {
 	ensureStringListContains(config, "entry_points", "/bin")
 	ensureStringListContains(config, "entry_points", "/usr/bin")
 	ensureStringListContains(config, "entry_points", "/usr/local/bin")
-	ensureStringListContains(config, "entry_points", "/opt/python-occlum/bin")
 	ensureStringListContains(config, "entry_points", filepath.Dir(runtime.Executable))
 	ensureStringListContains(envConfig, "default", "OCCLUM=yes")
 	replaceEnvValue(envConfig, "default", "PYTHONHOME", runtime.Home)
 	replaceEnvValue(envConfig, "default", "PYTHONPATH", strings.Join(runtime.LibDirs, ":"))
+	replaceEnvValue(envConfig, "default", "LD_LIBRARY_PATH", buildLibraryPath(runtime))
 
 	updated, err := json.MarshalIndent(config, "", "  ")
 	if err != nil {
