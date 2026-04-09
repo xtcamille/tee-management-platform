@@ -57,8 +57,8 @@ go build -o data-connector main.go
 cd ../enclave-manager
 go run main.go
 
-# 4. 启动代码连接器（传入 Python 脚本）
-./code-connector /path/to/your/script.py
+# 4. 启动代码连接器（传入处理代码）
+./code-connector /path/to/your/code
 
 # 5. 启动数据连接器（传入数据文件）
 ./data-connector /path/to/your/data.txt

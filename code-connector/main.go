@@ -11,20 +11,20 @@ import (
 
 func main() {
 	if len(os.Args) < 2 {
-		log.Fatal("Usage: code-connector <script_path>")
+		log.Fatal("Usage: code-connector <code_path>")
 	}
 
-	scriptPath := os.Args[1]
-	scriptFile, err := os.Open(scriptPath)
+	codePath := os.Args[1]
+	codeFile, err := os.Open(codePath)
 	if err != nil {
-		log.Fatalf("Failed to open script: %v", err)
+		log.Fatalf("Failed to open code: %v", err)
 	}
-	defer scriptFile.Close()
+	defer codeFile.Close()
 
-	// Read and upload the script
-	body, err := io.ReadAll(scriptFile)
+	// Read and upload the code
+	body, err := io.ReadAll(codeFile)
 	if err != nil {
-		log.Fatalf("Failed to read script: %v", err)
+		log.Fatalf("Failed to read code: %v", err)
 	}
 
 	resp, err := http.Post("http://192.168.0.248:8081/upload-code", "application/octet-stream", bytes.NewBuffer(body))

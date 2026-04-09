@@ -9,7 +9,7 @@ import (
 	"tee-management-platform/enclave-manager/occlum"
 )
 
-var codePath string
+var uploadedCodePath string
 
 func UploadCode(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
@@ -29,13 +29,13 @@ func UploadCode(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	codePath = filepath.Join(tempDir, "process.py")
-	if err := ioutil.WriteFile(codePath, body, 0644); err != nil {
+	uploadedCodePath = filepath.Join(tempDir, "uploaded_code")
+	if err := ioutil.WriteFile(uploadedCodePath, body, 0644); err != nil {
 		http.Error(w, "Failed to write file", http.StatusInternalServerError)
 		return
 	}
 
-	fmt.Fprintf(w, "Code uploaded successfully to %s", codePath)
+	fmt.Fprintf(w, "Code uploaded successfully to %s", uploadedCodePath)
 }
 
 func StartEnclave(w http.ResponseWriter, r *http.Request) {
@@ -44,13 +44,13 @@ func StartEnclave(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if codePath == "" {
+	if uploadedCodePath == "" {
 		http.Error(w, "No code uploaded yet", http.StatusBadRequest)
 		return
 	}
 
 	// This starts the Go-based Enclave App inside Occlum, which handles RA-TLS
-	if err := occlum.Start(codePath); err != nil {
+	if err := occlum.Start(uploadedCodePath); err != nil {
 		http.Error(w, fmt.Sprintf("Failed to start enclave: %v", err), http.StatusInternalServerError)
 		return
 	}

@@ -9,7 +9,7 @@ import (
 func main() {
 	mux := http.NewServeMux()
 
-	// Upload processing code (e.g., Python script)
+	// Upload processing code (e.g., Go app source or binary)
 	mux.HandleFunc("/upload-code", handler.UploadCode)
 
 	// Start the Enclave with the uploaded code
