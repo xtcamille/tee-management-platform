@@ -45,7 +45,7 @@ func Start(uploadedCodePath string) error {
 	log.Printf("[Occlum] Stage 1/4 completed: Occlum workspace initialized")
 
 	appPath := filepath.Join(enclaveDir, "image", "bin", "enclave-app")
-	uploadedCodePath = "/root/zxt/tee-management-platform/enclave-app/enclave-app"
+	uploadedCodePath = "/zxt/tee-management-platform/enclave-app/enclave-app"
 	log.Printf("[Occlum] Stage 2/4: copying uploaded enclave app from %s to %s", uploadedCodePath, appPath)
 	if err := execCmd(enclaveDir, "cp", uploadedCodePath, appPath); err != nil {
 		return fmt.Errorf("failed to copy enclave-app binary: %v", err)
