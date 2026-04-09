@@ -43,7 +43,11 @@ func Start(uploadedCodePath string) error {
 	if err := execCmd(enclaveDir, "cp", uploadedCodePath, appPath); err != nil {
 		return fmt.Errorf("failed to copy enclave-app binary: %v", err)
 	}
-	log.Printf("[Occlum] Stage 2/4 completed: enclave app binary copied")
+	log.Printf("[Occlum] Setting executable permission on %s", appPath)
+	if err := os.Chmod(appPath, 0755); err != nil {
+		return fmt.Errorf("failed to set executable permission on enclave-app: %v", err)
+	}
+	log.Printf("[Occlum] Stage 2/4 completed: enclave app binary copied and permissions set")
 
 	log.Printf("[Occlum] Stage 3/4: building Occlum image")
 	if err := execCmd(enclaveDir, "occlum", "build"); err != nil {
