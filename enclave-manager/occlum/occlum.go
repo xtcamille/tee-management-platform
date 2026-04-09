@@ -3,6 +3,7 @@ package occlum
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"os/exec"
@@ -16,6 +17,11 @@ var enclaveDir string
 func Start(uploadedCodePath string) error {
 	enclaveDir = "/tmp/occlum_workspace"
 	log.Printf("[Occlum] Starting enclave setup. workspace=%s uploadedCodePath=%s", enclaveDir, uploadedCodePath)
+
+	log.Printf("[Occlum] Validating uploaded binary format: %s", uploadedCodePath)
+	if err := validateELF(uploadedCodePath); err != nil {
+		return fmt.Errorf("uploaded binary is invalid: %v. Please ensure you compiled for GOOS=linux GOARCH=amd64 -buildmode=pie", err)
+	}
 
 	log.Printf("[Occlum] Cleaning workspace: %s", enclaveDir)
 	if err := os.RemoveAll(enclaveDir); err != nil {
@@ -232,6 +238,34 @@ func parseOcclumSize(value any) (int64, bool) {
 	default:
 		return toInt64(value)
 	}
+}
+
+func validateELF(path string) error {
+	f, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+
+	header := make([]byte, 20)
+	if _, err := io.ReadFull(f, header); err != nil {
+		return fmt.Errorf("failed to read file header: %v", err)
+	}
+
+	// 1. Check ELF magic bytes (\x7fELF)
+	if header[0] != 0x7f || header[1] != 'E' || header[2] != 'L' || header[3] != 'F' {
+		return fmt.Errorf("not a valid Linux ELF binary (missing magic bytes)")
+	}
+
+	// 2. Check architecture (e_machine at offset 18)
+	// EM_X86_64 = 0x3e (62)
+	// Note: header is Little-Endian or Big-Endian depending on EI_DATA, but EM_X86_64 is 62 in both if low byte is 0x3e.
+	// Typically on x86-64 it's 0x3e 0x00.
+	if header[18] != 0x3e || header[19] != 0x00 {
+		return fmt.Errorf("invalid architecture: expected x86-64 (0x3e), got 0x%02x%02x", header[18], header[19])
+	}
+
+	return nil
 }
 
 func Process(data []byte) ([]byte, error) {
