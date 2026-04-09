@@ -1,6 +1,7 @@
 package main
 
 import (
+	"crypto/tls"
 	"encoding/csv"
 	"fmt"
 	"io"
@@ -9,23 +10,40 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"tee-management-platform/internal/ratls"
 	"time"
 )
 
 func main() {
-	log.Println("[Enclave App] Starting enclave application in HTTP diagnostic mode")
+	log.Println("[Enclave App] Starting enclave application with RA-TLS")
+
+	// 1. Generate RA-TLS Certificate
+	// Simulation mode is enabled for development
+	log.Println("[Enclave App] Generating RA-TLS certificate in simulation mode")
+	cert, err := ratls.GenerateCertificate(true)
+	if err != nil {
+		log.Fatalf("[Enclave App] Failed to generate RA-TLS certificate: %v", err)
+	}
+	log.Println("[Enclave App] RA-TLS certificate generated successfully")
+
+	// 2. Start TLS Server
+	tlsConfig := &tls.Config{
+		Certificates: []tls.Certificate{cert},
+		MinVersion:   tls.VersionTLS13,
+	}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/data", handleSecureData)
 
 	server := &http.Server{
-		Addr:    ":8443",
-		Handler: mux,
+		Addr:      ":8443",
+		Handler:   mux,
+		TLSConfig: tlsConfig,
 	}
 
-	log.Printf("[Enclave App] HTTP diagnostic server listening on %s", server.Addr)
-	if err := server.ListenAndServe(); err != nil {
-		log.Fatalf("[Enclave App] HTTP diagnostic server exited with error: %v", err)
+	log.Printf("[Enclave App] RA-TLS server listening on %s", server.Addr)
+	if err := server.ListenAndServeTLS("", ""); err != nil {
+		log.Fatalf("[Enclave App] RA-TLS server exited with error: %v", err)
 	}
 }
 
