@@ -140,6 +140,7 @@ func buildEnclaveApp(sourcePath string, appPath string) error {
 
 type pythonRuntime struct {
 	Executable string   `json:"executable"`
+	Home       string   `json:"home"`
 	LibDirs    []string `json:"lib_dirs"`
 }
 
@@ -249,11 +250,24 @@ func findPythonBOMTemplate() (string, error) {
 }
 
 func discoverPythonRuntime() (*pythonRuntime, error) {
-	if _, err := exec.LookPath("python3"); err != nil {
-		return nil, fmt.Errorf("python3 not found on host: %v", err)
-	}
 	if _, err := exec.LookPath("copy_bom"); err != nil {
 		return nil, fmt.Errorf("copy_bom not found on host: %v", err)
+	}
+
+	pythonHome := strings.TrimSpace(os.Getenv("PYTHONHOME"))
+	if pythonHome == "" {
+		pythonHome = defaultPythonHome
+	}
+
+	if runtime, err := discoverPythonRuntimeFromHome(pythonHome); err == nil {
+		log.Printf("[Occlum] Host python runtime discovered from PYTHONHOME: home=%s executable=%s lib_dirs=%v", runtime.Home, runtime.Executable, runtime.LibDirs)
+		return runtime, nil
+	} else {
+		log.Printf("[Occlum] PYTHONHOME runtime discovery failed for %s, falling back to host python3 lookup: %v", pythonHome, err)
+	}
+
+	if _, err := exec.LookPath("python3"); err != nil {
+		return nil, fmt.Errorf("python3 not found on host: %v", err)
 	}
 
 	script := strings.Join([]string{
@@ -263,7 +277,7 @@ func discoverPythonRuntime() (*pythonRuntime, error) {
 		`    value = sysconfig.get_path(key)`,
 		`    if value and os.path.isdir(value) and value not in paths:`,
 		`        paths.append(value)`,
-		`print(json.dumps({"executable": os.path.realpath(sys.executable), "lib_dirs": paths}))`,
+		`print(json.dumps({"executable": os.path.realpath(sys.executable), "home": os.environ.get("PYTHONHOME", ""), "lib_dirs": paths}))`,
 	}, "\n")
 
 	cmd := exec.Command("python3", "-c", script)
@@ -279,10 +293,60 @@ func discoverPythonRuntime() (*pythonRuntime, error) {
 	if runtime.Executable == "" {
 		return nil, fmt.Errorf("host python3 inspection returned empty executable path")
 	}
+	if runtime.Home == "" {
+		runtime.Home = filepath.Dir(filepath.Dir(runtime.Executable))
+	}
 	if len(runtime.LibDirs) == 0 {
 		return nil, fmt.Errorf("host python3 inspection returned no library directories")
 	}
+	log.Printf("[Occlum] Host python runtime discovered: executable=%s home=%s lib_dirs=%v", runtime.Executable, runtime.Home, runtime.LibDirs)
 	return &runtime, nil
+}
+
+func discoverPythonRuntimeFromHome(pythonHome string) (*pythonRuntime, error) {
+	if pythonHome == "" {
+		return nil, fmt.Errorf("python home is empty")
+	}
+	if !pathExists(pythonHome) {
+		return nil, fmt.Errorf("python home does not exist: %s", pythonHome)
+	}
+
+	candidates := []string{
+		filepath.Join(pythonHome, "bin", "python3"),
+		filepath.Join(pythonHome, "bin", "python3.8"),
+		filepath.Join(pythonHome, "bin", "python"),
+	}
+
+	executable := ""
+	for _, candidate := range candidates {
+		if pathExists(candidate) {
+			executable = candidate
+			break
+		}
+	}
+	if executable == "" {
+		return nil, fmt.Errorf("no python executable found under %s/bin", pythonHome)
+	}
+
+	libDirs := make([]string, 0)
+	for _, candidate := range []string{
+		filepath.Join(pythonHome, "lib", "python3.8"),
+		filepath.Join(pythonHome, "lib", "python3.8", "lib-dynload"),
+		filepath.Join(pythonHome, "lib", "python3.8", "site-packages"),
+	} {
+		if pathExists(candidate) {
+			libDirs = append(libDirs, candidate)
+		}
+	}
+	if len(libDirs) == 0 {
+		return nil, fmt.Errorf("no python library directories found under %s/lib", pythonHome)
+	}
+
+	return &pythonRuntime{
+		Executable: executable,
+		Home:       pythonHome,
+		LibDirs:    libDirs,
+	}, nil
 }
 
 func renderPythonRuntimeBOM(runtime *pythonRuntime) string {
@@ -297,6 +361,11 @@ func renderPythonRuntimeBOM(runtime *pythonRuntime) string {
 	builder.WriteString("    copy:\n")
 	builder.WriteString("      - files:\n")
 	builder.WriteString(fmt.Sprintf("          - %s\n", runtime.Executable))
+	if runtime.Home != "" && pathExists(runtime.Home) {
+		builder.WriteString("      - dirs:\n")
+		builder.WriteString(fmt.Sprintf("          - %s\n", runtime.Home))
+		return builder.String()
+	}
 	builder.WriteString("      - dirs:\n")
 	for _, dir := range libDirs {
 		builder.WriteString(fmt.Sprintf("          - %s\n", dir))
