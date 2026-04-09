@@ -14,8 +14,6 @@ import (
 var enclaveDir string
 
 const defaultPythonHome = "/opt/python-occlum"
-const defaultPythonPath = "/opt/python-occlum/lib/python3.8:/opt/python-occlum/lib/python3.8/lib-dynload:/opt/python-occlum/lib/python3.8/site-packages"
-const defaultPythonInterpreter = "/usr/bin/python3.8"
 
 var pythonBOMCandidates = []string{
 	"/opt/occlum/etc/template/python-glibc.yaml",
@@ -49,10 +47,14 @@ func Start(uploadedCodePath string) error {
 	if err := execCmd(enclaveDir, "occlum", "init"); err != nil {
 		return fmt.Errorf("occlum init failed: %v", err)
 	}
-	if err := tuneOcclumConfig(enclaveDir); err != nil {
+	runtime, err := discoverPythonRuntime()
+	if err != nil {
+		return fmt.Errorf("failed to discover Python runtime: %v", err)
+	}
+	if err := tuneOcclumConfig(enclaveDir, runtime); err != nil {
 		return fmt.Errorf("failed to tune Occlum.json: %v", err)
 	}
-	if err := preparePythonRuntime(enclaveDir); err != nil {
+	if err := preparePythonRuntime(enclaveDir, runtime); err != nil {
 		return fmt.Errorf("failed to prepare Python runtime: %v", err)
 	}
 	log.Printf("[Occlum] Stage 1/5 completed: Occlum workspace initialized")
@@ -144,17 +146,12 @@ type pythonRuntime struct {
 	LibDirs    []string `json:"lib_dirs"`
 }
 
-func preparePythonRuntime(workspace string) error {
-	runtime, err := discoverPythonRuntime()
-	if err != nil {
+func preparePythonRuntime(workspace string, runtime *pythonRuntime) error {
+	log.Printf("[Occlum] Preparing Python runtime: executable=%s home=%s lib_dirs=%v", runtime.Executable, runtime.Home, runtime.LibDirs)
+	if err := writePythonPathConfig(workspace, runtime.Executable); err != nil {
 		return err
 	}
-
-	log.Printf("[Occlum] Host python runtime discovered: executable=%s lib_dirs=%v", runtime.Executable, runtime.LibDirs)
-	if err := writePythonPathConfig(workspace, defaultPythonInterpreter); err != nil {
-		return err
-	}
-	log.Printf("[Occlum] Wrote enclave Python interpreter config: %s", defaultPythonInterpreter)
+	log.Printf("[Occlum] Wrote enclave Python interpreter config: %s", runtime.Executable)
 
 	if err := preparePythonRuntimeFromTemplate(workspace, runtime); err == nil {
 		log.Printf("[Occlum] Python runtime prepared from Occlum template successfully")
@@ -397,7 +394,7 @@ func containsString(values []string, target string) bool {
 	return false
 }
 
-func tuneOcclumConfig(workspace string) error {
+func tuneOcclumConfig(workspace string, runtime *pythonRuntime) error {
 	configPath := filepath.Join(workspace, "Occlum.json")
 	raw, err := os.ReadFile(configPath)
 	if err != nil {
@@ -424,9 +421,10 @@ func tuneOcclumConfig(workspace string) error {
 	ensureStringListContains(config, "entry_points", "/usr/bin")
 	ensureStringListContains(config, "entry_points", "/usr/local/bin")
 	ensureStringListContains(config, "entry_points", "/opt/python-occlum/bin")
+	ensureStringListContains(config, "entry_points", filepath.Dir(runtime.Executable))
 	ensureStringListContains(envConfig, "default", "OCCLUM=yes")
-	ensureStringListContains(envConfig, "default", "PYTHONHOME="+defaultPythonHome)
-	ensureStringListContains(envConfig, "default", "PYTHONPATH="+defaultPythonPath)
+	replaceEnvValue(envConfig, "default", "PYTHONHOME", runtime.Home)
+	replaceEnvValue(envConfig, "default", "PYTHONPATH", strings.Join(runtime.LibDirs, ":"))
 
 	updated, err := json.MarshalIndent(config, "", "  ")
 	if err != nil {
@@ -495,6 +493,31 @@ func ensureStringListContains(parent map[string]any, key string, value string) {
 	parent[key] = current
 }
 
+func replaceEnvValue(parent map[string]any, key string, envKey string, envValue string) {
+	current := make([]string, 0)
+	switch values := parent[key].(type) {
+	case []string:
+		current = append(current, values...)
+	case []any:
+		for _, item := range values {
+			if s, ok := item.(string); ok {
+				current = append(current, s)
+			}
+		}
+	}
+
+	prefix := envKey + "="
+	for i, item := range current {
+		if strings.HasPrefix(item, prefix) {
+			current[i] = prefix + envValue
+			parent[key] = current
+			return
+		}
+	}
+	current = append(current, prefix+envValue)
+	parent[key] = current
+}
+
 func toInt64(value any) (int64, bool) {
 	switch v := value.(type) {
 	case int:
@@ -523,21 +546,24 @@ func parseOcclumSize(value any) (int64, bool) {
 		if s == "" {
 			return 0, false
 		}
-		units := map[string]int64{
-			"KB": 1024,
-			"MB": 1024 * 1024,
-			"GB": 1024 * 1024 * 1024,
-			"TB": 1024 * 1024 * 1024 * 1024,
-			"B":  1,
+		units := []struct {
+			suffix     string
+			multiplier int64
+		}{
+			{"TB", 1024 * 1024 * 1024 * 1024},
+			{"GB", 1024 * 1024 * 1024},
+			{"MB", 1024 * 1024},
+			{"KB", 1024},
+			{"B", 1},
 		}
-		for suffix, multiplier := range units {
-			if strings.HasSuffix(s, suffix) {
-				base := strings.TrimSpace(strings.TrimSuffix(s, suffix))
+		for _, unit := range units {
+			if strings.HasSuffix(s, unit.suffix) {
+				base := strings.TrimSpace(strings.TrimSuffix(s, unit.suffix))
 				n, err := strconv.ParseInt(base, 10, 64)
 				if err != nil {
 					return 0, false
 				}
-				return n * multiplier, true
+				return n * unit.multiplier, true
 			}
 		}
 		n, err := strconv.ParseInt(s, 10, 64)
