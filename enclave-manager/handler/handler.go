@@ -1,7 +1,10 @@
 package handler
 
 import (
+	"archive/zip"
+	"bytes"
 	"fmt"
+	"io"
 	"io/ioutil"
 	"net/http"
 	"os"
@@ -29,13 +32,45 @@ func UploadCode(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	uploadedCodePath = filepath.Join(tempDir, "uploaded_code")
-	if err := ioutil.WriteFile(uploadedCodePath, body, 0644); err != nil {
-		http.Error(w, "Failed to write file", http.StatusInternalServerError)
+	zipReader, err := zip.NewReader(bytes.NewReader(body), int64(len(body)))
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Failed to read zip: %v", err), http.StatusBadRequest)
 		return
 	}
 
-	fmt.Fprintf(w, "Code uploaded successfully to %s", uploadedCodePath)
+	var extractedFile io.ReadCloser
+	for _, f := range zipReader.File {
+		if !f.FileInfo().IsDir() {
+			rc, err := f.Open()
+			if err != nil {
+				http.Error(w, fmt.Sprintf("Failed to open file in zip: %v", err), http.StatusInternalServerError)
+				return
+			}
+			extractedFile = rc
+			break
+		}
+	}
+
+	if extractedFile == nil {
+		http.Error(w, "No file found in zip archive", http.StatusBadRequest)
+		return
+	}
+	defer extractedFile.Close()
+
+	uploadedCodePath = filepath.Join(tempDir, "uploaded_code")
+	out, err := os.OpenFile(uploadedCodePath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0755)
+	if err != nil {
+		http.Error(w, "Failed to create extracted file", http.StatusInternalServerError)
+		return
+	}
+	defer out.Close()
+
+	if _, err := io.Copy(out, extractedFile); err != nil {
+		http.Error(w, "Failed to write extracted file", http.StatusInternalServerError)
+		return
+	}
+
+	fmt.Fprintf(w, "Code uploaded and extracted successfully to %s", uploadedCodePath)
 }
 
 func StartEnclave(w http.ResponseWriter, r *http.Request) {
