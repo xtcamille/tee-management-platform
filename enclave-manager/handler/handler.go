@@ -1,8 +1,9 @@
 package handler
 
 import (
-	"archive/zip"
+	"archive/tar"
 	"bytes"
+	"compress/gzip"
 	"fmt"
 	"io"
 	"io/ioutil"
@@ -32,30 +33,14 @@ func UploadCode(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	zipReader, err := zip.NewReader(bytes.NewReader(body), int64(len(body)))
+	gzr, err := gzip.NewReader(bytes.NewReader(body))
 	if err != nil {
-		http.Error(w, fmt.Sprintf("Failed to read zip: %v", err), http.StatusBadRequest)
+		http.Error(w, fmt.Sprintf("Failed to read gzip: %v", err), http.StatusBadRequest)
 		return
 	}
+	defer gzr.Close()
 
-	var extractedFile io.ReadCloser
-	for _, f := range zipReader.File {
-		if !f.FileInfo().IsDir() {
-			rc, err := f.Open()
-			if err != nil {
-				http.Error(w, fmt.Sprintf("Failed to open file in zip: %v", err), http.StatusInternalServerError)
-				return
-			}
-			extractedFile = rc
-			break
-		}
-	}
-
-	if extractedFile == nil {
-		http.Error(w, "No file found in zip archive", http.StatusBadRequest)
-		return
-	}
-	defer extractedFile.Close()
+	tr := tar.NewReader(gzr)
 
 	uploadedCodePath = filepath.Join(tempDir, "uploaded_code")
 	out, err := os.OpenFile(uploadedCodePath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0755)
@@ -65,8 +50,28 @@ func UploadCode(w http.ResponseWriter, r *http.Request) {
 	}
 	defer out.Close()
 
-	if _, err := io.Copy(out, extractedFile); err != nil {
-		http.Error(w, "Failed to write extracted file", http.StatusInternalServerError)
+	found := false
+	for {
+		header, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			http.Error(w, fmt.Sprintf("Failed to read tar: %v", err), http.StatusInternalServerError)
+			return
+		}
+		if header.Typeflag == tar.TypeReg || header.Typeflag == tar.TypeRegA {
+			if _, err := io.Copy(out, tr); err != nil {
+				http.Error(w, "Failed to write extracted file", http.StatusInternalServerError)
+				return
+			}
+			found = true
+			break
+		}
+	}
+
+	if !found {
+		http.Error(w, "No file found in tar.gz archive", http.StatusBadRequest)
 		return
 	}
 

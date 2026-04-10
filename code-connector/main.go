@@ -34,7 +34,8 @@ func main() {
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		log.Fatalf("Upload failed with status: %v", resp.Status)
+		respBody, _ := io.ReadAll(resp.Body)
+		log.Fatalf("Upload failed with status: %v, Body: %s", resp.Status, string(respBody))
 	}
 
 	fmt.Println("Code uploaded successfully!")
@@ -47,7 +48,8 @@ func main() {
 	defer respStart.Body.Close()
 
 	if respStart.StatusCode != http.StatusOK {
-		log.Fatalf("Enclave start failed: %v", respStart.Status)
+		respBody, _ := io.ReadAll(respStart.Body)
+		log.Fatalf("Enclave start failed: %v, Body: %s", respStart.Status, string(respBody))
 	}
 
 	fmt.Println("Enclave started successfully on the platform!")
