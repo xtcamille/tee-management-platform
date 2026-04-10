@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"io/ioutil"
 	"log"
 	"os"
 	"os/exec"
@@ -94,12 +95,12 @@ func execCmd(dir string, name string, args ...string) error {
 
 func tuneOcclumConfig(workspace string) error {
 	configPath := filepath.Join(workspace, "Occlum.json")
-	raw, err := os.ReadFile(configPath)
+	raw, err := ioutil.ReadFile(configPath)
 	if err != nil {
 		return err
 	}
 
-	var config map[string]any
+	var config map[string]interface{}
 	if err := json.Unmarshal(raw, &config); err != nil {
 		return err
 	}
@@ -120,7 +121,7 @@ func tuneOcclumConfig(workspace string) error {
 		return err
 	}
 	updated = append(updated, '\n')
-	if err := os.WriteFile(configPath, updated, 0644); err != nil {
+	if err := ioutil.WriteFile(configPath, updated, 0644); err != nil {
 		return err
 	}
 
@@ -134,23 +135,23 @@ func tuneOcclumConfig(workspace string) error {
 	return nil
 }
 
-func ensureMap(parent map[string]any, key string) map[string]any {
-	if existing, ok := parent[key].(map[string]any); ok {
+func ensureMap(parent map[string]interface{}, key string) map[string]interface{} {
+	if existing, ok := parent[key].(map[string]interface{}); ok {
 		return existing
 	}
-	child := map[string]any{}
+	child := map[string]interface{}{}
 	parent[key] = child
 	return child
 }
 
-func ensureMinInt(parent map[string]any, key string, minValue int64) {
+func ensureMinInt(parent map[string]interface{}, key string, minValue int64) {
 	if current, ok := toInt64(parent[key]); ok && current >= minValue {
 		return
 	}
 	parent[key] = minValue
 }
 
-func ensureMinSize(parent map[string]any, key string, minValue string) {
+func ensureMinSize(parent map[string]interface{}, key string, minValue string) {
 	minBytes, _ := parseOcclumSize(minValue)
 	if currentBytes, ok := parseOcclumSize(parent[key]); ok && currentBytes >= minBytes {
 		return
@@ -158,12 +159,12 @@ func ensureMinSize(parent map[string]any, key string, minValue string) {
 	parent[key] = minValue
 }
 
-func ensureStringListContains(parent map[string]any, key string, value string) {
+func ensureStringListContains(parent map[string]interface{}, key string, value string) {
 	current := make([]string, 0)
 	switch values := parent[key].(type) {
 	case []string:
 		current = append(current, values...)
-	case []any:
+	case []interface{}:
 		for _, item := range values {
 			if s, ok := item.(string); ok {
 				current = append(current, s)
@@ -181,7 +182,7 @@ func ensureStringListContains(parent map[string]any, key string, value string) {
 	parent[key] = current
 }
 
-func toInt64(value any) (int64, bool) {
+func toInt64(value interface{}) (int64, bool) {
 	switch v := value.(type) {
 	case int:
 		return int64(v), true
@@ -202,7 +203,7 @@ func toInt64(value any) (int64, bool) {
 	}
 }
 
-func parseOcclumSize(value any) (int64, bool) {
+func parseOcclumSize(value interface{}) (int64, bool) {
 	switch v := value.(type) {
 	case string:
 		s := strings.ToUpper(strings.TrimSpace(v))
