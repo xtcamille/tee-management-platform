@@ -7,6 +7,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"os"
 	"sort"
 	"strconv"
 	"strings"
@@ -35,8 +36,12 @@ func main() {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/data", handleSecureData)
 
+	port := os.Getenv("APP_PORT")
+	if port == "" {
+		port = "8443"
+	}
 	server := &http.Server{
-		Addr:      ":8443",
+		Addr:      ":" + port,
 		Handler:   mux,
 		TLSConfig: tlsConfig,
 	}
@@ -55,6 +60,8 @@ func handleSecureData(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
+
+	reportStatus("DATA_RECEIVED")
 
 	log.Printf(
 		"[Enclave App] Received secure request: method=%s path=%s remote=%s content_type=%s content_length=%d",
@@ -87,6 +94,25 @@ func handleSecureData(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	log.Printf("[Enclave App] Successfully returned %d bytes in %s", len(result), time.Since(startedAt))
+	reportStatus("DONE")
+}
+
+func reportStatus(status string) {
+	taskID := os.Getenv("TASK_ID")
+	managerURL := os.Getenv("MANAGER_URL")
+	if taskID == "" || managerURL == "" {
+		return
+	}
+
+	go func() {
+		payload := fmt.Sprintf(`{"task_id":"%s","status":"%s"}`, taskID, status)
+		resp, err := http.Post(managerURL+"/task-callback", "application/json", strings.NewReader(payload))
+		if err == nil {
+			resp.Body.Close()
+		} else {
+			log.Printf("[Enclave App] Failed to report callback: %v", err)
+		}
+	}()
 }
 
 func processCSV(data []byte) ([]byte, error) {

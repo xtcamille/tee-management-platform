@@ -4,6 +4,7 @@ import (
 	"archive/tar"
 	"bytes"
 	"compress/gzip"
+	"encoding/json"
 	"fmt"
 	"io"
 	"io/ioutil"
@@ -11,10 +12,31 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sync"
 	"tee-management-platform/enclave-manager/occlum"
+	"time"
 )
 
-var uploadedCodePath string
+var taskMap sync.Map // maps taskID string -> *TaskInfo
+
+type TaskState string
+
+const (
+	StateCodeUploaded TaskState = "CODE_UPLOADED"
+	StateStarting     TaskState = "STARTING_ENCLAVE"
+	StateRunning      TaskState = "ENCLAVE_RUNNING"
+	StateDataReceived TaskState = "DATA_RECEIVED"
+	StateDone         TaskState = "DONE"
+	StateFailed       TaskState = "FAILED"
+)
+
+type TaskInfo struct {
+	ID       string    `json:"task_id"`
+	Status   TaskState `json:"status"`
+	CodePath string    `json:"-"`
+	Port     int       `json:"port,omitempty"`
+	Error    string    `json:"error,omitempty"`
+}
 
 func UploadCode(w http.ResponseWriter, r *http.Request) {
 	log.Printf("[UploadCode] Received POST request from %s", r.RemoteAddr)
@@ -32,7 +54,8 @@ func UploadCode(w http.ResponseWriter, r *http.Request) {
 	}
 	log.Printf("[UploadCode] Read %d bytes from request body", len(body))
 
-	tempDir := filepath.Join(os.TempDir(), "tee-code")
+	taskID := fmt.Sprintf("%d", time.Now().UnixNano())
+	tempDir := filepath.Join(os.TempDir(), "tee-code", taskID)
 	if err := os.MkdirAll(tempDir, 0755); err != nil {
 		log.Printf("[UploadCode] Error creating temp dir %s: %v", tempDir, err)
 		http.Error(w, "Failed to create directory", http.StatusInternalServerError)
@@ -51,7 +74,7 @@ func UploadCode(w http.ResponseWriter, r *http.Request) {
 
 	tr := tar.NewReader(gzr)
 
-	uploadedCodePath = filepath.Join(tempDir, "uploaded_code")
+	uploadedCodePath := filepath.Join(tempDir, "uploaded_code")
 	out, err := os.OpenFile(uploadedCodePath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0755)
 	if err != nil {
 		log.Printf("[UploadCode] Error opening output file %s: %v", uploadedCodePath, err)
@@ -94,8 +117,24 @@ func UploadCode(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	log.Printf("[UploadCode] Finished processing completely: saved to %s", uploadedCodePath)
-	fmt.Fprintf(w, "Code uploaded and extracted successfully to %s", uploadedCodePath)
+	taskInfo := &TaskInfo{
+		ID:       taskID,
+		Status:   StateCodeUploaded,
+		CodePath: uploadedCodePath,
+	}
+	taskMap.Store(taskID, taskInfo)
+	log.Printf("[UploadCode] Finished processing completely: saved to %s for task %s", uploadedCodePath, taskID)
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{
+		"task_id": taskID,
+		"status":  "success",
+		"message": fmt.Sprintf("Code uploaded and extracted successfully to %s", uploadedCodePath),
+	})
+}
+
+type StartRequest struct {
+	TaskID string `json:"task_id"`
 }
 
 func StartEnclave(w http.ResponseWriter, r *http.Request) {
@@ -104,18 +143,97 @@ func StartEnclave(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if uploadedCodePath == "" {
-		http.Error(w, "No code uploaded yet", http.StatusBadRequest)
+	var req StartRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid JSON body", http.StatusBadRequest)
 		return
 	}
 
+	if req.TaskID == "" {
+		http.Error(w, "Missing task_id", http.StatusBadRequest)
+		return
+	}
+
+	taskInfoAny, ok := taskMap.Load(req.TaskID)
+	if !ok {
+		http.Error(w, "Invalid or expired task_id", http.StatusBadRequest)
+		return
+	}
+	taskInfo := taskInfoAny.(*TaskInfo)
+
+	taskInfo.Status = StateStarting
+
 	// This starts the Go-based Enclave App inside Occlum, which handles RA-TLS
-	if err := occlum.Start(uploadedCodePath); err != nil {
+	port, err := occlum.Start(req.TaskID, taskInfo.CodePath)
+	if err != nil {
+		taskInfo.Status = StateFailed
+		taskInfo.Error = err.Error()
 		http.Error(w, fmt.Sprintf("Failed to start enclave: %v", err), http.StatusInternalServerError)
 		return
 	}
 
-	fmt.Fprintf(w, "Enclave started successfully. RA-TLS server listening on port 8443.")
+	taskInfo.Status = StateRunning
+	taskInfo.Port = port
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"status":  "success",
+		"task_id": req.TaskID,
+		"port":    port,
+	})
+}
+
+func GetTaskStatus(w http.ResponseWriter, r *http.Request) {
+	taskID := r.URL.Query().Get("task_id")
+	if taskID == "" {
+		http.Error(w, "Missing task_id", http.StatusBadRequest)
+		return
+	}
+
+	taskInfoAny, ok := taskMap.Load(taskID)
+	if !ok {
+		http.Error(w, "Task not found", http.StatusNotFound)
+		return
+	}
+	taskInfo := taskInfoAny.(*TaskInfo)
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(taskInfo)
+}
+
+type CallbackRequest struct {
+	TaskID string    `json:"task_id"`
+	Status TaskState `json:"status"`
+	Error  string    `json:"error,omitempty"`
+}
+
+func UpdateTaskCallback(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req CallbackRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid JSON", http.StatusBadRequest)
+		return
+	}
+
+	taskInfoAny, ok := taskMap.Load(req.TaskID)
+	if !ok {
+		http.Error(w, "Task not found", http.StatusNotFound)
+		return
+	}
+	taskInfo := taskInfoAny.(*TaskInfo)
+
+	taskInfo.Status = req.Status
+	if req.Error != "" {
+		taskInfo.Error = req.Error
+	}
+
+	log.Printf("[Callback] Task %s reached status %s", req.TaskID, req.Status)
+	w.WriteHeader(http.StatusOK)
+	w.Write([]byte("OK"))
 }
 
 // ProcessData is now handled directly between Data Connector and Enclave
