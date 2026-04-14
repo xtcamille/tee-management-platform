@@ -9,27 +9,37 @@ echo ""
 cleanup() {
     echo ""
     echo "Stopping all services..."
+    # Suppress output if processes are already gone
     kill $MANAGER_PID $FRONTEND_PID $DATA_PID 2>/dev/null
-    exit
+    
+    # Remove the trap so we don't infinitely loop on exit
+    trap - SIGINT SIGTERM EXIT
+    exit 0
 }
 
-# Catch Ctrl+C and termination signals to run cleanup
-trap cleanup SIGINT SIGTERM
+# Catch Ctrl+C and script exit
+trap cleanup SIGINT SIGTERM EXIT
 
 echo "[1/3] Starting Enclave Manager Backend (Port 8081)..."
-(cd enclave-manager && go run main.go) &
+cd enclave-manager
+go run main.go &
 MANAGER_PID=$!
+cd ..
 
 # Wait for the manager to initialize
 sleep 2
 
 echo "[2/3] Starting Enclave Manager Frontend (Port 5174)..."
-(cd enclave-manager-frontend && go run main.go) &
+cd enclave-manager-frontend
+go run main.go &
 FRONTEND_PID=$!
+cd ..
 
 echo "[3/3] Starting Data Connector Proxy Service (Port 8082)..."
-(cd data-connector && go run main.go) &
+cd data-connector
+go run main.go &
 DATA_PID=$!
+cd ..
 
 echo ""
 echo "All core services have been launched in the background!"
