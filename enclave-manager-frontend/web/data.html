@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Data Connector (Web)</title>
+  <link rel="stylesheet" href="./styles.css" />
+</head>
+<body>
+  <div class="page-shell">
+    <header class="hero" style="padding-bottom: 2rem;">
+      <div class="hero-copy">
+        <a href="./index.html" class="button button-ghost" style="margin-bottom: 1rem;">← 返回看板</a>
+        <p class="eyebrow">Step 2</p>
+        <h1>Data Connector</h1>
+        <p class="hero-text">
+          在这个页面注入业务 CSV 数据。<br/>
+          请确保您在后台启动了 <code>go run main.go</code> (Data Connector 服务)，本页将自动把数据喂给它，由它代劳完成 RA-TLS 高级硬件安全认证传输！
+        </p>
+      </div>
+      <aside class="hero-side" id="connectionSummary">
+        <!-- Rendered by app.js -->
+      </aside>
+    </header>
+
+    <main class="workspace" style="max-width: 800px; margin: 0 auto; display: block;">
+      <section class="panel panel-upload">
+        <div class="panel-head">
+          <div>
+            <h2>发送安全数据</h2>
+          </div>
+          <p class="panel-note">彻底告别报错！通过本地代理服务直接与硬件级 Enclave 沟通。</p>
+        </div>
+
+        <form id="dataForm" class="stack-form">
+          <label class="field" for="targetUrlInput">
+            <span class="field-label">目标 Task ID</span>
+            <input id="targetUrlInput" type="text" placeholder="输入要发送数据的 task_id" required />
+            <span class="field-hint">请从看板中复制您的任务 ID，它会自动通过本地服务路由。</span>
+          </label>
+
+          <label class="field file-field" for="csvInput">
+            <span class="field-label">选择业务数据 (CSV)</span>
+            <input id="csvInput" type="file" accept=".csv" required />
+          </label>
+
+          <div class="button-row">
+            <button type="submit" class="button button-primary" id="dataSubmitButton">
+              安全注入数据并获取结果
+            </button>
+          </div>
+        </form>
+
+        <div class="subsection" style="margin-top: 2rem; border-top: 1px solid var(--border-subtle); padding-top: 2rem;">
+          <div class="subsection-head">
+            <h3>返回结果控制台</h3>
+          </div>
+          <div id="dataResult" style="min-height: 100px; background: var(--bg-crust); padding: 1.5rem; border: 1px solid var(--border-subtle); border-radius: 8px; font-family: monospace; white-space: pre-wrap;">
+            <p class="info-text">等待发送...</p>
+          </div>
+        </div>
+
+      </section>
+    </main>
+
+    <div id="toastRegion" class="toast-region" aria-live="polite" aria-atomic="true"></div>
+  </div>
+
+  <script type="module" src="./app.js"></script>
+</body>
+</html>

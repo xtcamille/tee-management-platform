@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Enclave Manager Dashboard</title>
+  <link rel="stylesheet" href="./styles.css" />
+</head>
+<body>
+  <div class="page-shell">
+    <header class="hero">
+      <div class="hero-copy">
+        <p class="eyebrow">Trusted Execution Console</p>
+        <h1>Enclave Dashboard</h1>
+        <p class="hero-text">
+          实时跟踪您的 TEE 多租户任务。点击上方导航快速体验代码发布与安全数据请求。
+        </p>
+        <div class="hero-tags" style="margin-top: 1rem;">
+          <a href="./code.html" class="button button-primary">进入 Code Connector</a>
+          <a href="./data.html" class="button button-secondary">进入 Data Connector</a>
+        </div>
+      </div>
+      <aside class="hero-side" id="connectionSummary">
+        <div class="skeleton-block skeleton-lg"></div>
+        <div class="skeleton-grid">
+          <div class="skeleton-block"></div>
+          <div class="skeleton-block"></div>
+          <div class="skeleton-block"></div>
+          <div class="skeleton-block"></div>
+        </div>
+      </aside>
+    </header>
+
+    <main class="workspace">
+      <section class="panel panel-recent">
+        <div class="panel-head">
+          <div>
+            <p class="panel-kicker">Task List</p>
+            <h2>任务列表</h2>
+          </div>
+          <p class="panel-note">点击下方列表中的“查看详情”按钮，即可在下方区域展开该任务的详细信息。</p>
+        </div>
+        <div id="recentTasksList" class="task-list">
+          <div class="empty-state compact">
+            <p>暂无任务。</p>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel panel-status">
+        <div class="panel-head">
+          <div>
+            <p class="panel-kicker">Task Details</p>
+            <h2>任务详情</h2>
+          </div>
+          <p class="panel-note">这里会展示上述选中任务的状态、端口、由于错误信息和日志。</p>
+        </div>
+        <div id="selectedTaskPanel" class="selected-task">
+          <div class="empty-state">
+            <h3>还没有选中任务</h3>
+            <p>请先从上方任务列表中选中一个任务。</p>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <div id="toastRegion" class="toast-region" aria-live="polite" aria-atomic="true"></div>
+  </div>
+
+  <script type="module" src="./app.js"></script>
+</body>
+</html>

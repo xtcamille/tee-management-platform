@@ -1,0 +1,158 @@
+package main
+
+import (
+	"embed"
+	"encoding/json"
+	"io/fs"
+	"log"
+	"net/http"
+	"net/http/httputil"
+	"net/url"
+	"os"
+	"path"
+	"strings"
+)
+
+//go:embed web/*
+var webFiles embed.FS
+
+type frontendConfig struct {
+	ManagerBaseURL string `json:"managerBaseUrl"`
+	ProxyBasePath  string `json:"proxyBasePath"`
+	FrontendPort   string `json:"frontendPort"`
+}
+
+func main() {
+	managerBaseURL := getenv("MANAGER_BASE_URL", "http://192.168.0.248:8081")
+	frontendPort := getenv("PORT", "5174")
+
+	target, err := url.Parse(managerBaseURL)
+	if err != nil || target.Scheme == "" || target.Host == "" {
+		log.Fatalf("invalid MANAGER_BASE_URL %q", managerBaseURL)
+	}
+
+	webRoot, err := fs.Sub(webFiles, "web")
+	if err != nil {
+		log.Fatalf("failed to load embedded frontend assets: %v", err)
+	}
+
+	// fileServer := http.FileServer(http.FS(webRoot))
+	apiProxy := newManagerProxy(target)
+
+	mux := http.NewServeMux()
+
+	mux.Handle("/api/", apiProxy)
+
+	mux.HandleFunc("/app-config", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+
+		writeJSON(w, http.StatusOK, frontendConfig{
+			ManagerBaseURL: managerBaseURL,
+			ProxyBasePath:  "/api",
+			FrontendPort:   frontendPort,
+		})
+	})
+
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/api/") {
+			http.NotFound(w, r)
+			return
+		}
+
+		cleanedPath := path.Clean("/" + strings.TrimPrefix(r.URL.Path, "/"))
+		relativePath := strings.TrimPrefix(cleanedPath, "/")
+		if relativePath == "" || relativePath == "." {
+			relativePath = "index.html"
+		}
+
+		if _, err := fs.Stat(webRoot, relativePath); err != nil {
+			if strings.Contains(path.Base(relativePath), ".") {
+				http.NotFound(w, r)
+				return
+			}
+			relativePath = "index.html"
+		}
+
+		b, err := fs.ReadFile(webRoot, relativePath)
+		if err != nil {
+			http.NotFound(w, r)
+			return
+		}
+
+		if strings.HasSuffix(relativePath, ".css") {
+			w.Header().Set("Content-Type", "text/css; charset=utf-8")
+		} else if strings.HasSuffix(relativePath, ".js") {
+			w.Header().Set("Content-Type", "application/javascript; charset=utf-8")
+		} else {
+			w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		}
+
+		w.Write(b)
+	})
+
+	addr := ":" + frontendPort
+	log.Printf("Enclave Manager Frontend listening on http://127.0.0.1%s", addr)
+	log.Printf("Proxying /api/* to %s", managerBaseURL)
+
+	if err := http.ListenAndServe(addr, logRequests(mux)); err != nil {
+		log.Fatalf("frontend server failed to start: %v", err)
+	}
+}
+
+func newManagerProxy(target *url.URL) *httputil.ReverseProxy {
+	proxy := httputil.NewSingleHostReverseProxy(target)
+
+	proxy.Director = func(req *http.Request) {
+		trimmedPath := strings.TrimPrefix(req.URL.Path, "/api")
+		if trimmedPath == "" {
+			trimmedPath = "/"
+		}
+
+		req.URL.Scheme = target.Scheme
+		req.URL.Host = target.Host
+		req.URL.Path = joinURLPath(target.Path, trimmedPath)
+		req.Host = target.Host
+	}
+
+	proxy.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
+		log.Printf("[frontend proxy] %s %s -> error: %v", r.Method, r.URL.Path, err)
+		http.Error(w, "Unable to reach enclave-manager: "+err.Error(), http.StatusBadGateway)
+	}
+
+	return proxy
+}
+
+func joinURLPath(basePath string, relativePath string) string {
+	if basePath == "" || basePath == "/" {
+		if relativePath == "" {
+			return "/"
+		}
+		return relativePath
+	}
+	return strings.TrimRight(basePath, "/") + "/" + strings.TrimLeft(relativePath, "/")
+}
+
+func writeJSON(w http.ResponseWriter, statusCode int, payload interface{}) {
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.WriteHeader(statusCode)
+	if err := json.NewEncoder(w).Encode(payload); err != nil {
+		log.Printf("failed to write json response: %v", err)
+	}
+}
+
+func logRequests(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		log.Printf("[frontend] %s %s", r.Method, r.URL.Path)
+		next.ServeHTTP(w, r)
+	})
+}
+
+func getenv(key string, fallback string) string {
+	if value := strings.TrimSpace(os.Getenv(key)); value != "" {
+		return value
+	}
+	return fallback
+}

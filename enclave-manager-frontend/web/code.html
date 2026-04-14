@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Code Connector (Web)</title>
+  <link rel="stylesheet" href="./styles.css" />
+</head>
+<body>
+  <div class="page-shell">
+    <header class="hero" style="padding-bottom: 2rem;">
+      <div class="hero-copy">
+        <a href="./index.html" class="button button-ghost" style="margin-bottom: 1rem;">← 返回看板</a>
+        <p class="eyebrow">Step 1</p>
+        <h1>Code Connector</h1>
+        <p class="hero-text">
+          这个页面用于模拟基于 Go 的 <code>code-connector</code> 工具发布过程。<br/>
+          上传您的 <code>enclave.tar.gz</code> 镜像包便会自动登记为新任务。
+        </p>
+      </div>
+      <aside class="hero-side" id="connectionSummary">
+        <!-- Rendered by app.js -->
+      </aside>
+    </header>
+
+    <main class="workspace" style="max-width: 800px; margin: 0 auto; display: block;">
+      <section class="panel panel-upload">
+        <div class="panel-head">
+          <div>
+            <h2>发布新任务</h2>
+          </div>
+          <p class="panel-note">将编译好的包含了 Linux PIE 可执行文件的 tar.gz 提供给 Manager。</p>
+        </div>
+
+        <form id="uploadForm" class="stack-form">
+          <label class="field file-field" for="archiveInput">
+            <span class="field-label">选择 <code>enclave.tar.gz</code></span>
+            <input id="archiveInput" type="file" accept=".tar.gz,.tgz,application/gzip" />
+            <span class="field-hint">
+              请确保包内包含 <code>GOOS=linux GOARCH=amd64 -buildmode=pie</code> 产物。
+            </span>
+          </label>
+
+          <div class="button-row">
+            <button type="submit" name="intent" value="upload_and_start" class="button button-primary" id="uploadAndStartButton">
+              上传并启动
+            </button>
+            <button type="submit" name="intent" value="upload_only" class="button button-secondary" id="uploadOnlyButton">
+              仅上传代码
+            </button>
+          </div>
+        </form>
+
+        <div class="mini-grid" style="margin-top: 2rem;">
+          <article class="mini-card">
+            <h3>上传后去哪里看？</h3>
+            <p>发布成功后，这个任务会被立刻加入本地浏览器的 Task 缓存中。请返回主看板查看最新分配的端口和运行状态。</p>
+          </article>
+        </div>
+        
+        <hr style="margin: 3rem 0; border: 0; border-top: 1px solid var(--border-subtle);" />
+
+        <div class="subsection">
+          <div class="subsection-head">
+            <div>
+              <h3>使用已有 Task ID</h3>
+            </div>
+            <p class="panel-note">如果您从命令行生成了任务，也可以把 task_id 填入此处加入看板同步。</p>
+          </div>
+          <form id="trackForm" class="inline-form">
+            <label class="field" for="trackTaskId">
+              <span class="field-label">Task ID</span>
+              <input id="trackTaskId" type="text" placeholder="输入已有 task_id" autocomplete="off" />
+            </label>
+            <button type="submit" class="button button-ghost">加入看板</button>
+          </form>
+        </div>
+      </section>
+    </main>
+
+    <div id="toastRegion" class="toast-region" aria-live="polite" aria-atomic="true"></div>
+  </div>
+
+  <script type="module" src="./app.js"></script>
+</body>
+</html>
