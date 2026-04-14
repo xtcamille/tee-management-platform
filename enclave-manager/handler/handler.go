@@ -247,6 +247,18 @@ func UpdateTaskCallback(w http.ResponseWriter, r *http.Request) {
 		log.Printf("[Callback] Final state reached. Instructing enclave to shutdown for task %s", req.TaskID)
 		taskInfo.StopFunc()
 		taskInfo.StopFunc = nil
+
+		// Cleanup Workspace Environment
+		go func(id string) {
+			time.Sleep(2 * time.Second) // wait for process to release file handles
+			workspaceDir := fmt.Sprintf("/tmp/occlum_workspace_%s", id)
+			log.Printf("[Cleanup] Deleting enclave environment at %s", workspaceDir)
+			if err := os.RemoveAll(workspaceDir); err != nil {
+				log.Printf("[Cleanup] Error deleting workspace for %s: %v", id, err)
+			} else {
+				log.Printf("[Cleanup] Successfully deleted environment for %s", id)
+			}
+		}(req.TaskID)
 	}
 
 	w.WriteHeader(http.StatusOK)
