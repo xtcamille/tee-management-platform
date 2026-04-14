@@ -4,6 +4,7 @@ import (
 	"archive/tar"
 	"bytes"
 	"compress/gzip"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -31,11 +32,12 @@ const (
 )
 
 type TaskInfo struct {
-	ID       string    `json:"task_id"`
-	Status   TaskState `json:"status"`
-	CodePath string    `json:"-"`
-	Port     int       `json:"port,omitempty"`
-	Error    string    `json:"error,omitempty"`
+	ID       string             `json:"task_id"`
+	Status   TaskState          `json:"status"`
+	CodePath string             `json:"-"`
+	Port     int                `json:"port,omitempty"`
+	Error    string             `json:"error,omitempty"`
+	StopFunc context.CancelFunc `json:"-"`
 }
 
 func UploadCode(w http.ResponseWriter, r *http.Request) {
@@ -161,10 +163,17 @@ func StartEnclave(w http.ResponseWriter, r *http.Request) {
 	}
 	taskInfo := taskInfoAny.(*TaskInfo)
 
+	// If a user restarts a task that hasn't finished, forcefully kill the running process first.
+	if taskInfo.StopFunc != nil {
+		log.Printf("[StartEnclave] Task %s is being restarted. Shutting down existing enclave process.", req.TaskID)
+		taskInfo.StopFunc()
+		taskInfo.StopFunc = nil
+	}
+
 	taskInfo.Status = StateStarting
 
 	// This starts the Go-based Enclave App inside Occlum, which handles RA-TLS
-	port, err := occlum.Start(req.TaskID, taskInfo.CodePath)
+	port, cancel, err := occlum.Start(req.TaskID, taskInfo.CodePath)
 	if err != nil {
 		taskInfo.Status = StateFailed
 		taskInfo.Error = err.Error()
@@ -174,6 +183,7 @@ func StartEnclave(w http.ResponseWriter, r *http.Request) {
 
 	taskInfo.Status = StateRunning
 	taskInfo.Port = port
+	taskInfo.StopFunc = cancel
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
@@ -232,6 +242,13 @@ func UpdateTaskCallback(w http.ResponseWriter, r *http.Request) {
 	}
 
 	log.Printf("[Callback] Task %s reached status %s", req.TaskID, req.Status)
+
+	if (req.Status == StateDone || req.Status == StateFailed) && taskInfo.StopFunc != nil {
+		log.Printf("[Callback] Final state reached. Instructing enclave to shutdown for task %s", req.TaskID)
+		taskInfo.StopFunc()
+		taskInfo.StopFunc = nil
+	}
+
 	w.WriteHeader(http.StatusOK)
 	w.Write([]byte("OK"))
 }

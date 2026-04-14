@@ -1,6 +1,7 @@
 package occlum
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -27,39 +28,39 @@ func getFreePort() (int, error) {
 	return l.Addr().(*net.TCPAddr).Port, nil
 }
 
-func Start(taskID string, uploadedCodePath string) (int, error) {
+func Start(taskID string, uploadedCodePath string) (int, context.CancelFunc, error) {
 	enclaveDir := fmt.Sprintf("/tmp/occlum_workspace_%s", taskID)
 	log.Printf("[Occlum] Starting enclave setup. taskID=%s workspace=%s uploadedCodePath=%s", taskID, enclaveDir, uploadedCodePath)
 
 	log.Printf("[Occlum] Validating uploaded binary format: %s", uploadedCodePath)
 	if err := validateELF(uploadedCodePath); err != nil {
-		return 0, fmt.Errorf("uploaded binary is invalid: %v. Please ensure you compiled for GOOS=linux GOARCH=amd64 -buildmode=pie", err)
+		return 0, nil, fmt.Errorf("uploaded binary is invalid: %v. Please ensure you compiled for GOOS=linux GOARCH=amd64 -buildmode=pie", err)
 	}
 
 	log.Printf("[Occlum] Cleaning workspace: %s", enclaveDir)
 	if err := os.RemoveAll(enclaveDir); err != nil {
-		return 0, fmt.Errorf("failed to clear workspace: %v", err)
+		return 0, nil, fmt.Errorf("failed to clear workspace: %v", err)
 	}
 	log.Printf("[Occlum] Workspace cleaned")
 
 	log.Printf("[Occlum] Creating workspace directory: %s", enclaveDir)
 	if err := os.MkdirAll(enclaveDir, 0755); err != nil {
-		return 0, fmt.Errorf("failed to create directory: %v", err)
+		return 0, nil, fmt.Errorf("failed to create directory: %v", err)
 	}
 	log.Printf("[Occlum] Workspace directory created")
 
 	log.Printf("[Occlum] Stage 1/4: initializing Occlum workspace")
 	if err := execCmd(enclaveDir, "occlum", "init"); err != nil {
-		return 0, fmt.Errorf("occlum init failed: %v", err)
+		return 0, nil, fmt.Errorf("occlum init failed: %v", err)
 	}
 
 	port, err := getFreePort()
 	if err != nil {
-		return 0, fmt.Errorf("failed to get free port: %v", err)
+		return 0, nil, fmt.Errorf("failed to get free port: %v", err)
 	}
 
 	if err := tuneOcclumConfig(enclaveDir, taskID, port); err != nil {
-		return 0, fmt.Errorf("failed to tune Occlum.json: %v", err)
+		return 0, nil, fmt.Errorf("failed to tune Occlum.json: %v", err)
 	}
 	log.Printf("[Occlum] Stage 1/4 completed: Occlum workspace initialized")
 
@@ -67,24 +68,27 @@ func Start(taskID string, uploadedCodePath string) (int, error) {
 	// uploadedCodePath = "/zxt/tee-management-platform/enclave-app/enclave-app"
 	log.Printf("[Occlum] Stage 2/4: copying uploaded enclave app from %s to %s", uploadedCodePath, appPath)
 	if err := execCmd(enclaveDir, "cp", uploadedCodePath, appPath); err != nil {
-		return 0, fmt.Errorf("failed to copy enclave-app binary: %v", err)
+		return 0, nil, fmt.Errorf("failed to copy enclave-app binary: %v", err)
 	}
 	log.Printf("[Occlum] Setting executable permission on %s", appPath)
 	if err := os.Chmod(appPath, 0755); err != nil {
-		return 0, fmt.Errorf("failed to set executable permission on enclave-app: %v", err)
+		return 0, nil, fmt.Errorf("failed to set executable permission on enclave-app: %v", err)
 	}
 	log.Printf("[Occlum] Stage 2/4 completed: enclave app binary copied and permissions set")
 
 	log.Printf("[Occlum] Stage 3/4: building Occlum image")
 	if err := execCmd(enclaveDir, "occlum", "build"); err != nil {
-		return 0, fmt.Errorf("occlum build failed: %v", err)
+		return 0, nil, fmt.Errorf("occlum build failed: %v", err)
 	}
 	log.Printf("[Occlum] Stage 3/4 completed: Occlum image built")
 
 	log.Printf("[Occlum] Stage 4/4: starting enclave process in background")
+
+	ctx, cancel := context.WithCancel(context.Background())
+
 	go func() {
 		log.Println("[Occlum] Running enclave process: occlum run /bin/enclave-app")
-		cmdRun := exec.Command("occlum", "run", "/bin/enclave-app")
+		cmdRun := exec.CommandContext(ctx, "occlum", "run", "/bin/enclave-app")
 		cmdRun.Dir = enclaveDir
 		cmdRun.Stdout = os.Stdout
 		cmdRun.Stderr = os.Stderr
@@ -96,7 +100,7 @@ func Start(taskID string, uploadedCodePath string) (int, error) {
 	}()
 
 	log.Printf("[Occlum] Stage 4/4 completed: enclave process launched, RA-TLS port=%d", port)
-	return port, nil
+	return port, cancel, nil
 }
 
 func execCmd(dir string, name string, args ...string) error {
