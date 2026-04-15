@@ -9,12 +9,15 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"net/url"
+	"os"
+	"strings"
 	"tee-management-platform/internal/ratls"
 	"time"
 )
 
 func main() {
-	port := "8082"
+	port := getenv("PORT", "8082")
 	fmt.Printf("[Data Connector Service] Starting HTTP server on port %s...\n", port)
 
 	http.HandleFunc("/forward", handleForward)
@@ -64,8 +67,11 @@ func handleForward(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Dynamic lookup
-	managerAPI := "http://192.168.0.248:8081/task-status?task_id=" + taskId
+	managerBaseURL := strings.TrimRight(getenv("MANAGER_BASE_URL", "http://127.0.0.1:8081"), "/")
+	managerAPI := managerBaseURL + "/task-status?task_id=" + url.QueryEscape(taskId)
 	fmt.Printf("[Data Connector Backend] Querying %s...\n", managerAPI)
+
+	enclaveHost := getenv("ENCLAVE_HOST", deriveHostFromURL(managerBaseURL, "127.0.0.1"))
 
 	targetUrl := ""
 	for {
@@ -95,7 +101,7 @@ func handleForward(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if taskInfo.Status == "ENCLAVE_RUNNING" && taskInfo.Port != 0 {
-			targetUrl = fmt.Sprintf("https://192.168.0.248:%d/data", taskInfo.Port)
+			targetUrl = fmt.Sprintf("https://%s:%d/data", enclaveHost, taskInfo.Port)
 			fmt.Printf("[Data Connector Backend] Target resolved to: %s\n", targetUrl)
 			break
 		}
@@ -138,4 +144,20 @@ func handleForward(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(resp.StatusCode)
 	w.Write(result)
 	fmt.Printf("[Data Connector Backend] Success! Forwarded result to client.\n")
+}
+
+func getenv(key string, fallback string) string {
+	value := strings.TrimSpace(os.Getenv(key))
+	if value == "" {
+		return fallback
+	}
+	return value
+}
+
+func deriveHostFromURL(rawURL string, fallback string) string {
+	parsed, err := url.Parse(rawURL)
+	if err != nil || parsed.Hostname() == "" {
+		return fallback
+	}
+	return parsed.Hostname()
 }

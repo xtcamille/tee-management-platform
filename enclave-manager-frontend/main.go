@@ -24,9 +24,10 @@ type frontendConfig struct {
 }
 
 func main() {
-	managerBaseURL := getenv("MANAGER_BASE_URL", "http://192.168.0.248:8081")
+	managerBaseURL := getenv("MANAGER_BASE_URL", "http://127.0.0.1:8081")
 	dataConnectorBaseURL := getenv("DATA_CONNECTOR_BASE_URL", deriveDataConnectorBaseURL(managerBaseURL, "8082"))
 	frontendPort := getenv("PORT", "5174")
+	displayHost := getenv("DISPLAY_HOST", "127.0.0.1")
 
 	target, err := url.Parse(managerBaseURL)
 	if err != nil || target.Scheme == "" || target.Host == "" {
@@ -97,8 +98,9 @@ func main() {
 	})
 
 	addr := ":" + frontendPort
-	log.Printf("Enclave Manager Frontend listening on http://127.0.0.1%s", addr)
+	log.Printf("Enclave Manager Frontend listening on http://%s%s", displayHost, addr)
 	log.Printf("Proxying /api/* to %s", managerBaseURL)
+	log.Printf("Forwarding browser data submissions to %s", dataConnectorBaseURL)
 
 	if err := http.ListenAndServe(addr, logRequests(mux)); err != nil {
 		log.Fatalf("frontend server failed to start: %v", err)

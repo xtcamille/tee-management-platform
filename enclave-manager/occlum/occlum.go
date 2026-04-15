@@ -19,6 +19,11 @@ import (
 	"time"
 )
 
+const (
+	defaultManagerURL     = "http://127.0.0.1:8081"
+	defaultRATLSProbeHost = "127.0.0.1"
+)
+
 func getFreePort() (int, error) {
 	addr, err := net.ResolveTCPAddr("tcp", "localhost:0")
 	if err != nil {
@@ -137,7 +142,8 @@ func waitForRATLSReady(ctx context.Context, port int, processExit <-chan error) 
 	}
 	defer client.CloseIdleConnections()
 
-	endpoint := fmt.Sprintf("https://127.0.0.1:%d/data", port)
+	probeHost := getenv("RATLS_PROBE_HOST", defaultRATLSProbeHost)
+	endpoint := fmt.Sprintf("https://%s:%d/data", probeHost, port)
 	ticker := time.NewTicker(retryInterval)
 	defer ticker.Stop()
 
@@ -209,7 +215,7 @@ func tuneOcclumConfig(workspace string, taskID string, port int) error {
 	ensureStringListContains(config, "entry_points", "/usr/local/bin")
 	ensureStringListContains(env, "default", fmt.Sprintf("APP_PORT=%d", port))
 	ensureStringListContains(env, "default", fmt.Sprintf("TASK_ID=%s", taskID))
-	ensureStringListContains(env, "default", "MANAGER_URL=http://127.0.0.1:8081")
+	ensureStringListContains(env, "default", fmt.Sprintf("MANAGER_URL=%s", getenv("MANAGER_URL", defaultManagerURL)))
 
 	updated, err := json.MarshalIndent(config, "", "  ")
 	if err != nil {
@@ -275,6 +281,14 @@ func ensureStringListContains(parent map[string]interface{}, key string, value s
 	}
 	current = append(current, value)
 	parent[key] = current
+}
+
+func getenv(key string, fallback string) string {
+	value := strings.TrimSpace(os.Getenv(key))
+	if value == "" {
+		return fallback
+	}
+	return value
 }
 
 func toInt64(value interface{}) (int64, bool) {
