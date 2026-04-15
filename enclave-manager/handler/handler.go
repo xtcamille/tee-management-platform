@@ -166,7 +166,6 @@ func StartEnclave(w http.ResponseWriter, r *http.Request) {
 	}
 	taskInfo := taskInfoAny.(*TaskInfo)
 
-	// If a user restarts a task that hasn't finished, forcefully kill the running process first.
 	taskInfo.mu.Lock()
 	existingStop := taskInfo.StopFunc
 	taskInfo.StopFunc = nil
@@ -182,7 +181,6 @@ func StartEnclave(w http.ResponseWriter, r *http.Request) {
 		existingStop()
 	}
 
-	// This starts the Go-based Enclave App inside Occlum, which handles RA-TLS
 	taskInfo.mu.RLock()
 	codePath := taskInfo.CodePath
 	taskInfo.mu.RUnlock()
@@ -264,7 +262,7 @@ func trackEnclaveExit(taskID string, taskInfo *TaskInfo, startVersion int64, exi
 		return
 	}
 
-	if taskInfo.Status == StateDone || taskInfo.Status == StateFailed {
+	if isFinalState(taskInfo.Status) {
 		log.Printf("[StartEnclave] Task %s process exit observed after final state %s", taskID, taskInfo.Status)
 		taskInfo.StopFunc = nil
 		scheduleWorkspaceCleanup(taskInfo, taskID)
@@ -313,6 +311,12 @@ func (t *TaskInfo) snapshot() *TaskInfo {
 	}
 }
 
+type CallbackRequest struct {
+	TaskID string    `json:"task_id"`
+	Status TaskState `json:"status"`
+	Error  string    `json:"error,omitempty"`
+}
+
 func UpdateTaskCallback(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -333,23 +337,34 @@ func UpdateTaskCallback(w http.ResponseWriter, r *http.Request) {
 	taskInfo := taskInfoAny.(*TaskInfo)
 
 	taskInfo.mu.Lock()
+	currentStatus := taskInfo.Status
+	if !shouldApplyCallbackStatus(currentStatus, req.Status) {
+		taskInfo.mu.Unlock()
+		log.Printf("[Callback] Ignored stale/regressive status update for task %s: current=%s incoming=%s", req.TaskID, currentStatus, req.Status)
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"status": "ignored",
+		})
+		return
+	}
+
 	taskInfo.Status = req.Status
-	if req.Error != "" {
+	if req.Error != "" || req.Status == StateDone {
 		taskInfo.Error = req.Error
 	}
 	stopFunc := taskInfo.StopFunc
-	if req.Status == StateDone || req.Status == StateFailed {
+	if isFinalState(req.Status) {
 		taskInfo.StopFunc = nil
 	}
 	taskInfo.mu.Unlock()
 
 	log.Printf("[Callback] Task %s reached status %s", req.TaskID, req.Status)
 
-	if (req.Status == StateDone || req.Status == StateFailed) && stopFunc != nil {
+	if isFinalState(req.Status) && stopFunc != nil {
 		log.Printf("[Callback] Final state reached. Instructing enclave to shutdown for task %s", req.TaskID)
 		stopFunc()
 	}
-	if req.Status == StateDone || req.Status == StateFailed {
+	if isFinalState(req.Status) {
 		scheduleWorkspaceCleanup(taskInfo, req.TaskID)
 	}
 
@@ -362,7 +377,7 @@ func UpdateTaskCallback(w http.ResponseWriter, r *http.Request) {
 func scheduleWorkspaceCleanup(taskInfo *TaskInfo, taskID string) {
 	taskInfo.CleanupOnce.Do(func() {
 		go func(id string) {
-			time.Sleep(2 * time.Second) // wait for process to release file handles
+			time.Sleep(2 * time.Second)
 			workspaceDir := fmt.Sprintf("/tmp/occlum_workspace_%s", id)
 			log.Printf("[Cleanup] Deleting enclave environment at %s", workspaceDir)
 			if err := os.RemoveAll(workspaceDir); err != nil {
@@ -374,10 +389,37 @@ func scheduleWorkspaceCleanup(taskInfo *TaskInfo, taskID string) {
 	})
 }
 
-type CallbackRequest struct {
-	TaskID string    `json:"task_id"`
-	Status TaskState `json:"status"`
-	Error  string    `json:"error,omitempty"`
+func shouldApplyCallbackStatus(current TaskState, next TaskState) bool {
+	if current == "" || current == next {
+		return true
+	}
+	if isFinalState(current) {
+		return false
+	}
+	return stateOrder(next) >= stateOrder(current)
+}
+
+func isFinalState(state TaskState) bool {
+	return state == StateDone || state == StateFailed
+}
+
+func stateOrder(state TaskState) int {
+	switch state {
+	case StateCodeUploaded:
+		return 1
+	case StateStarting:
+		return 2
+	case StateRunning:
+		return 3
+	case StateDataReceived:
+		return 4
+	case StateDone:
+		return 5
+	case StateFailed:
+		return 6
+	default:
+		return 0
+	}
 }
 
 // ProcessData is now handled directly between Data Connector and Enclave

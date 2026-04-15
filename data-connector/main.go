@@ -76,8 +76,22 @@ func handleForward(w http.ResponseWriter, r *http.Request) {
 	targetUrl := ""
 	for {
 		statusResp, err := http.Get(managerAPI)
-		if err != nil || statusResp.StatusCode != 200 {
-			http.Error(w, "Failed to fetch task status. Manager down?", http.StatusInternalServerError)
+		if err != nil {
+			http.Error(w, fmt.Sprintf("Failed to fetch task status from manager: %v", err), http.StatusInternalServerError)
+			return
+		}
+		statusBody, readErr := io.ReadAll(statusResp.Body)
+		statusResp.Body.Close()
+		if readErr != nil {
+			http.Error(w, fmt.Sprintf("Failed to read manager response: %v", readErr), http.StatusInternalServerError)
+			return
+		}
+		if statusResp.StatusCode != http.StatusOK {
+			message := strings.TrimSpace(string(statusBody))
+			if message == "" {
+				message = http.StatusText(statusResp.StatusCode)
+			}
+			http.Error(w, fmt.Sprintf("Manager task-status returned %d: %s", statusResp.StatusCode, message), statusResp.StatusCode)
 			return
 		}
 
@@ -86,11 +100,10 @@ func handleForward(w http.ResponseWriter, r *http.Request) {
 			Status string `json:"status"`
 			Error  string `json:"error"`
 		}
-		if err := json.NewDecoder(statusResp.Body).Decode(&taskInfo); err != nil {
+		if err := json.Unmarshal(statusBody, &taskInfo); err != nil {
 			http.Error(w, "Failed to decode manager JSON", http.StatusInternalServerError)
 			return
 		}
-		statusResp.Body.Close()
 
 		if taskInfo.Status == "FAILED" {
 			http.Error(w, fmt.Sprintf("Task failed to start: %s", taskInfo.Error), http.StatusInternalServerError)
