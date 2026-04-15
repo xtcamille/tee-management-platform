@@ -37,39 +37,39 @@ func getFreePort() (int, error) {
 	return l.Addr().(*net.TCPAddr).Port, nil
 }
 
-func Start(taskID string, uploadedCodePath string) (int, context.CancelFunc, <-chan error, error) {
+func Start(taskID string, uploadedCodePath string) (int, context.CancelFunc, <-chan error, <-chan error, error) {
 	enclaveDir := fmt.Sprintf("/tmp/occlum_workspace_%s", taskID)
 	log.Printf("[Occlum] Starting enclave setup. taskID=%s workspace=%s uploadedCodePath=%s", taskID, enclaveDir, uploadedCodePath)
 
 	log.Printf("[Occlum] Validating uploaded binary format: %s", uploadedCodePath)
 	if err := validateELF(uploadedCodePath); err != nil {
-		return 0, nil, nil, fmt.Errorf("uploaded binary is invalid: %v. Please ensure you compiled for GOOS=linux GOARCH=amd64 -buildmode=pie", err)
+		return 0, nil, nil, nil, fmt.Errorf("uploaded binary is invalid: %v. Please ensure you compiled for GOOS=linux GOARCH=amd64 -buildmode=pie", err)
 	}
 
 	log.Printf("[Occlum] Cleaning workspace: %s", enclaveDir)
 	if err := os.RemoveAll(enclaveDir); err != nil {
-		return 0, nil, nil, fmt.Errorf("failed to clear workspace: %v", err)
+		return 0, nil, nil, nil, fmt.Errorf("failed to clear workspace: %v", err)
 	}
 	log.Printf("[Occlum] Workspace cleaned")
 
 	log.Printf("[Occlum] Creating workspace directory: %s", enclaveDir)
 	if err := os.MkdirAll(enclaveDir, 0755); err != nil {
-		return 0, nil, nil, fmt.Errorf("failed to create directory: %v", err)
+		return 0, nil, nil, nil, fmt.Errorf("failed to create directory: %v", err)
 	}
 	log.Printf("[Occlum] Workspace directory created")
 
 	log.Printf("[Occlum] Stage 1/4: initializing Occlum workspace")
 	if err := execCmd(enclaveDir, "occlum", "init"); err != nil {
-		return 0, nil, nil, fmt.Errorf("occlum init failed: %v", err)
+		return 0, nil, nil, nil, fmt.Errorf("occlum init failed: %v", err)
 	}
 
 	port, err := getFreePort()
 	if err != nil {
-		return 0, nil, nil, fmt.Errorf("failed to get free port: %v", err)
+		return 0, nil, nil, nil, fmt.Errorf("failed to get free port: %v", err)
 	}
 
 	if err := tuneOcclumConfig(enclaveDir, taskID, port); err != nil {
-		return 0, nil, nil, fmt.Errorf("failed to tune Occlum.json: %v", err)
+		return 0, nil, nil, nil, fmt.Errorf("failed to tune Occlum.json: %v", err)
 	}
 	log.Printf("[Occlum] Stage 1/4 completed: Occlum workspace initialized")
 
@@ -77,24 +77,25 @@ func Start(taskID string, uploadedCodePath string) (int, context.CancelFunc, <-c
 	// uploadedCodePath = "/zxt/tee-management-platform/enclave-app/enclave-app"
 	log.Printf("[Occlum] Stage 2/4: copying uploaded enclave app from %s to %s", uploadedCodePath, appPath)
 	if err := execCmd(enclaveDir, "cp", uploadedCodePath, appPath); err != nil {
-		return 0, nil, nil, fmt.Errorf("failed to copy enclave-app binary: %v", err)
+		return 0, nil, nil, nil, fmt.Errorf("failed to copy enclave-app binary: %v", err)
 	}
 	log.Printf("[Occlum] Setting executable permission on %s", appPath)
 	if err := os.Chmod(appPath, 0755); err != nil {
-		return 0, nil, nil, fmt.Errorf("failed to set executable permission on enclave-app: %v", err)
+		return 0, nil, nil, nil, fmt.Errorf("failed to set executable permission on enclave-app: %v", err)
 	}
 	log.Printf("[Occlum] Stage 2/4 completed: enclave app binary copied and permissions set")
 
 	log.Printf("[Occlum] Stage 3/4: building Occlum image")
 	if err := execCmd(enclaveDir, "occlum", "build"); err != nil {
-		return 0, nil, nil, fmt.Errorf("occlum build failed: %v", err)
+		return 0, nil, nil, nil, fmt.Errorf("occlum build failed: %v", err)
 	}
 	log.Printf("[Occlum] Stage 3/4 completed: Occlum image built")
 
 	log.Printf("[Occlum] Stage 4/4: starting enclave process in background")
 
 	ctx, cancel := context.WithCancel(context.Background())
-	processExit := make(chan error, 1)
+	readinessProcessExit := make(chan error, 1)
+	exitCh := make(chan error, 1)
 	readinessCh := make(chan error, 1)
 
 	go func() {
@@ -105,15 +106,21 @@ func Start(taskID string, uploadedCodePath string) (int, context.CancelFunc, <-c
 		cmdRun.Stderr = os.Stderr
 		if err := cmdRun.Run(); err != nil {
 			log.Printf("[Occlum] Enclave process exited with error: %v", err)
-			processExit <- err
+			readinessProcessExit <- err
+			exitCh <- err
+			close(readinessProcessExit)
+			close(exitCh)
 			return
 		}
 		log.Printf("[Occlum] Enclave process exited successfully")
-		processExit <- nil
+		readinessProcessExit <- nil
+		exitCh <- nil
+		close(readinessProcessExit)
+		close(exitCh)
 	}()
 
 	go func() {
-		err := waitForRATLSReady(ctx, port, processExit)
+		err := waitForRATLSReady(ctx, port, readinessProcessExit)
 		if err == nil {
 			log.Printf("[Occlum] Stage 4/4 completed: enclave process ready, RA-TLS port=%d", port)
 		}
@@ -122,7 +129,7 @@ func Start(taskID string, uploadedCodePath string) (int, context.CancelFunc, <-c
 	}()
 
 	log.Printf("[Occlum] Stage 4/4 launched: enclave process starting, awaiting RA-TLS readiness on port=%d", port)
-	return port, cancel, readinessCh, nil
+	return port, cancel, readinessCh, exitCh, nil
 }
 
 func waitForRATLSReady(ctx context.Context, port int, processExit <-chan error) error {
@@ -216,7 +223,8 @@ func tuneOcclumConfig(workspace string, taskID string, port int) error {
 	ensureStringListContains(config, "entry_points", "/usr/local/bin")
 	ensureStringListContains(env, "default", fmt.Sprintf("APP_PORT=%d", port))
 	ensureStringListContains(env, "default", fmt.Sprintf("TASK_ID=%s", taskID))
-	ensureStringListContains(env, "default", fmt.Sprintf("MANAGER_URL=%s", getenv("MANAGER_URL", defaultManagerURL)))
+	managerURL := getenv("MANAGER_URL", getenv("MANAGER_BASE_URL", defaultManagerURL))
+	ensureStringListContains(env, "default", fmt.Sprintf("MANAGER_URL=%s", managerURL))
 
 	updated, err := json.MarshalIndent(config, "", "  ")
 	if err != nil {

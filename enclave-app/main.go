@@ -84,6 +84,7 @@ func handleSecureData(w http.ResponseWriter, r *http.Request) {
 	result, err := processCSV(data)
 	if err != nil {
 		log.Printf("[Enclave App] CSV processing failed: %v", err)
+		reportStatusWithError("FAILED", err.Error())
 		fmt.Fprintf(w, "Error during processing: %v", err)
 		return
 	}
@@ -91,6 +92,7 @@ func handleSecureData(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/octet-stream")
 	if _, err := w.Write(result); err != nil {
 		log.Printf("[Enclave App] Failed to write response body: err=%v", err)
+		reportStatusWithError("FAILED", err.Error())
 		return
 	}
 	log.Printf("[Enclave App] Successfully returned %d bytes in %s", len(result), time.Since(startedAt))
@@ -98,6 +100,10 @@ func handleSecureData(w http.ResponseWriter, r *http.Request) {
 }
 
 func reportStatus(status string) {
+	reportStatusWithError(status, "")
+}
+
+func reportStatusWithError(status string, errorMessage string) {
 	taskID := os.Getenv("TASK_ID")
 	managerURL := os.Getenv("MANAGER_URL")
 	if taskID == "" || managerURL == "" {
@@ -105,7 +111,11 @@ func reportStatus(status string) {
 	}
 
 	go func() {
-		payload := fmt.Sprintf(`{"task_id":"%s","status":"%s"}`, taskID, status)
+		payload := fmt.Sprintf(`{"task_id":"%s","status":"%s"`, taskID, status)
+		if errorMessage != "" {
+			payload += fmt.Sprintf(`,"error":%q`, errorMessage)
+		}
+		payload += "}"
 		resp, err := http.Post(managerURL+"/task-callback", "application/json", strings.NewReader(payload))
 		if err == nil {
 			resp.Body.Close()

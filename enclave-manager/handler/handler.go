@@ -32,14 +32,15 @@ const (
 )
 
 type TaskInfo struct {
-	mu       sync.RWMutex       `json:"-"`
-	ID       string             `json:"task_id"`
-	Status   TaskState          `json:"status"`
-	CodePath string             `json:"-"`
-	Port     int                `json:"port,omitempty"`
-	Error    string             `json:"error,omitempty"`
-	StopFunc context.CancelFunc `json:"-"`
-	Version  int64              `json:"-"`
+	mu          sync.RWMutex       `json:"-"`
+	ID          string             `json:"task_id"`
+	Status      TaskState          `json:"status"`
+	CodePath    string             `json:"-"`
+	Port        int                `json:"port,omitempty"`
+	Error       string             `json:"error,omitempty"`
+	StopFunc    context.CancelFunc `json:"-"`
+	Version     int64              `json:"-"`
+	CleanupOnce sync.Once          `json:"-"`
 }
 
 func UploadCode(w http.ResponseWriter, r *http.Request) {
@@ -186,7 +187,7 @@ func StartEnclave(w http.ResponseWriter, r *http.Request) {
 	codePath := taskInfo.CodePath
 	taskInfo.mu.RUnlock()
 
-	port, cancel, readinessCh, err := occlum.Start(req.TaskID, codePath)
+	port, cancel, readinessCh, exitCh, err := occlum.Start(req.TaskID, codePath)
 	if err != nil {
 		taskInfo.mu.Lock()
 		taskInfo.Status = StateFailed
@@ -202,9 +203,11 @@ func StartEnclave(w http.ResponseWriter, r *http.Request) {
 	taskInfo.Port = port
 	taskInfo.Error = ""
 	taskInfo.StopFunc = cancel
+	taskInfo.CleanupOnce = sync.Once{}
 	taskInfo.mu.Unlock()
 
 	go trackRATLSReadiness(req.TaskID, taskInfo, startVersion, port, readinessCh)
+	go trackEnclaveExit(req.TaskID, taskInfo, startVersion, exitCh)
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
@@ -245,6 +248,38 @@ func trackRATLSReadiness(taskID string, taskInfo *TaskInfo, startVersion int64, 
 	taskInfo.Port = port
 	taskInfo.Error = ""
 	log.Printf("[StartEnclave] Task %s RA-TLS is reachable. Status -> %s", taskID, StateRunning)
+}
+
+func trackEnclaveExit(taskID string, taskInfo *TaskInfo, startVersion int64, exitCh <-chan error) {
+	exitErr, ok := <-exitCh
+	if !ok {
+		return
+	}
+
+	taskInfo.mu.Lock()
+	defer taskInfo.mu.Unlock()
+
+	if taskInfo.Version != startVersion {
+		log.Printf("[StartEnclave] Ignoring stale enclave exit result for task %s (version=%d current=%d)", taskID, startVersion, taskInfo.Version)
+		return
+	}
+
+	if taskInfo.Status == StateDone || taskInfo.Status == StateFailed {
+		log.Printf("[StartEnclave] Task %s process exit observed after final state %s", taskID, taskInfo.Status)
+		taskInfo.StopFunc = nil
+		scheduleWorkspaceCleanup(taskInfo, taskID)
+		return
+	}
+
+	taskInfo.Status = StateFailed
+	if exitErr != nil {
+		taskInfo.Error = fmt.Sprintf("Enclave 进程已退出：%v", exitErr)
+	} else {
+		taskInfo.Error = "Enclave 进程已退出。"
+	}
+	taskInfo.StopFunc = nil
+	log.Printf("[StartEnclave] Task %s process exited before manager received a final callback: %v", taskID, exitErr)
+	scheduleWorkspaceCleanup(taskInfo, taskID)
 }
 
 func GetTaskStatus(w http.ResponseWriter, r *http.Request) {
@@ -313,8 +348,19 @@ func UpdateTaskCallback(w http.ResponseWriter, r *http.Request) {
 	if (req.Status == StateDone || req.Status == StateFailed) && stopFunc != nil {
 		log.Printf("[Callback] Final state reached. Instructing enclave to shutdown for task %s", req.TaskID)
 		stopFunc()
+	}
+	if req.Status == StateDone || req.Status == StateFailed {
+		scheduleWorkspaceCleanup(taskInfo, req.TaskID)
+	}
 
-		// Cleanup Workspace Environment
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"status": "success",
+	})
+}
+
+func scheduleWorkspaceCleanup(taskInfo *TaskInfo, taskID string) {
+	taskInfo.CleanupOnce.Do(func() {
 		go func(id string) {
 			time.Sleep(2 * time.Second) // wait for process to release file handles
 			workspaceDir := fmt.Sprintf("/tmp/occlum_workspace_%s", id)
@@ -324,12 +370,7 @@ func UpdateTaskCallback(w http.ResponseWriter, r *http.Request) {
 			} else {
 				log.Printf("[Cleanup] Successfully deleted environment for %s", id)
 			}
-		}(req.TaskID)
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{
-		"status": "success",
+		}(taskID)
 	})
 }
 
