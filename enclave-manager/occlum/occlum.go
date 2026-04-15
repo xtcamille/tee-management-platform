@@ -127,13 +127,9 @@ func Start(taskID string, uploadedCodePath string) (int, context.CancelFunc, <-c
 
 func waitForRATLSReady(ctx context.Context, port int, processExit <-chan error) error {
 	const (
-		startupTimeout = 60 * time.Second
 		retryInterval  = 500 * time.Millisecond
 		requestTimeout = 3 * time.Second
 	)
-
-	deadlineCtx, cancel := context.WithTimeout(ctx, startupTimeout)
-	defer cancel()
 
 	client := &http.Client{
 		Timeout: requestTimeout,
@@ -154,7 +150,7 @@ func waitForRATLSReady(ctx context.Context, port int, processExit <-chan error) 
 
 	var lastErr error
 	for {
-		req, err := http.NewRequestWithContext(deadlineCtx, http.MethodGet, endpoint, nil)
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 		if err != nil {
 			return fmt.Errorf("failed to build RA-TLS readiness probe: %w", err)
 		}
@@ -173,11 +169,11 @@ func waitForRATLSReady(ctx context.Context, port int, processExit <-chan error) 
 				return fmt.Errorf("enclave process exited before RA-TLS became ready: %w", exitErr)
 			}
 			return fmt.Errorf("enclave process exited before RA-TLS became ready")
-		case <-deadlineCtx.Done():
+		case <-ctx.Done():
 			if lastErr != nil {
-				return fmt.Errorf("timed out waiting for RA-TLS readiness on %s: %w", endpoint, lastErr)
+				return fmt.Errorf("stopped waiting for RA-TLS readiness on %s: %w", endpoint, lastErr)
 			}
-			return fmt.Errorf("timed out waiting for RA-TLS readiness on %s", endpoint)
+			return fmt.Errorf("stopped waiting for RA-TLS readiness on %s", endpoint)
 		case <-ticker.C:
 		}
 	}

@@ -13,7 +13,8 @@
         <p class="eyebrow">Trusted Execution Console</p>
         <h1>Enclave Dashboard</h1>
         <p class="hero-text">
-          实时跟踪您的 TEE 多租户任务。点击上方导航快速体验代码发布与安全数据请求。
+          实时跟踪你的 TEE 多租户任务。任务在发起启动后会先进入“正在启动 Enclave”，
+          只有在 RA-TLS 端口真实可访问后，状态才会切换为“Enclave 运行中”。
         </p>
         <div class="hero-tags" style="margin-top: 1rem;">
           <a href="./code.html" class="button button-primary">进入 Code Connector</a>
@@ -38,7 +39,9 @@
             <p class="panel-kicker">Task List</p>
             <h2>任务列表</h2>
           </div>
-          <p class="panel-note">点击下方列表中的“查看详情”按钮，即可在下方区域展开该任务的详细信息。</p>
+          <p class="panel-note">
+            点击下方列表中的“查看详情”即可展开任务面板。你会看到当前状态、最近同步时间、RA-TLS 端口和错误信息。
+          </p>
         </div>
         <div id="recentTasksList" class="task-list">
           <div class="empty-state compact">
@@ -53,12 +56,14 @@
             <p class="panel-kicker">Task Details</p>
             <h2>任务详情</h2>
           </div>
-          <p class="panel-note">这里会展示上述选中任务的状态、端口、由于错误信息和日志。</p>
+          <p class="panel-note">
+            状态流说明：代码上传后先进入启动阶段；只有 RA-TLS probe 成功后才会显示为运行中；如果探测失败或进程退出，则会进入失败状态。
+          </p>
         </div>
         <div id="selectedTaskPanel" class="selected-task">
           <div class="empty-state">
             <h3>还没有选中任务</h3>
-            <p>请先从上方任务列表中选中一个任务。</p>
+            <p>请先从上方任务列表中选择一个任务。</p>
           </div>
         </div>
       </section>
