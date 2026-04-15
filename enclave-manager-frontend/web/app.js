@@ -340,7 +340,18 @@ async function handleDataSubmit(event) {
       throw new Error(`代理错误 (${rawResponse.status})：${textResult}`);
     }
 
-    elements.dataResult.innerHTML = `<h3>Enclave 返回结果</h3><pre>${escapeHTML(textResult)}</pre>`;
+    let parsedResult = null;
+    try {
+      parsedResult = JSON.parse(textResult);
+    } catch (_error) {
+      parsedResult = null;
+    }
+
+    if (parsedResult && typeof parsedResult === "object" && parsedResult.verification) {
+      elements.dataResult.innerHTML = renderVerificationResult(parsedResult);
+    } else {
+      elements.dataResult.innerHTML = `<h3>Enclave 返回结果</h3><pre>${escapeHTML(textResult)}</pre>`;
+    }
     showToast("数据处理成功。");
   } catch (error) {
     elements.dataResult.innerHTML = `<p class="task-error">请求失败：${escapeHTML(error.message)}</p>`;
@@ -958,6 +969,71 @@ function readJSON(storageKey, fallback) {
 
 function encodeCopy(text) {
   return encodeURIComponent(text);
+}
+
+function renderVerificationResult(payload) {
+  const resultText = typeof payload?.result === "string" ? payload.result : "";
+  const verification = payload?.verification || {};
+  const steps = Array.isArray(verification.steps) ? verification.steps : [];
+  const stepMarkup = steps.length > 0
+    ? steps.map((step, index) => `
+        <div class="event-row">
+          <span>${escapeHTML(String(index + 1))}. ${escapeHTML(step.name || "未命名步骤")}：${escapeHTML(formatVerificationStatus(step.status))}</span>
+          <time>${escapeHTML(step.details || "")}</time>
+        </div>
+      `).join("")
+    : `<div class="event-row"><span>暂无验证步骤。</span><time></time></div>`;
+
+  const summaryRows = [
+    ["验证结果", verification.success ? "通过" : "未通过"],
+    ["验证模式", verification.mode || "未知"],
+    ["RA-TLS 端点", verification.endpoint || "未知"],
+    ["TLS 版本", verification.tlsVersion || "未知"],
+    ["密码套件", verification.cipherSuite || "未知"],
+    ["证书组织", verification.certificateOrg || "未知"],
+    ["证书有效期", verification.validFrom && verification.validTo ? `${verification.validFrom} ~ ${verification.validTo}` : "未知"],
+    ["Quote OID", verification.quoteOid || "未知"],
+    ["Quote 摘要", verification.quoteSummary || "未知"],
+  ];
+
+  if (verification.error) {
+    summaryRows.push(["错误信息", verification.error]);
+  }
+
+  const summaryMarkup = summaryRows.map(([label, value]) => `
+    <div class="detail-card">
+      <span>${escapeHTML(label)}</span>
+      <strong>${escapeHTML(value)}</strong>
+    </div>
+  `).join("");
+
+  return `
+    <div class="event-card">
+      <h3>Enclave 返回结果</h3>
+      <pre>${escapeHTML(resultText)}</pre>
+    </div>
+    <div class="event-card">
+      <h3>RA-TLS 认证摘要</h3>
+      <div class="detail-grid">${summaryMarkup}</div>
+    </div>
+    <div class="event-card">
+      <h3>认证过程</h3>
+      <div class="event-list">${stepMarkup}</div>
+    </div>
+  `;
+}
+
+function formatVerificationStatus(status) {
+  switch (status) {
+    case "success":
+      return "成功";
+    case "error":
+      return "失败";
+    case "pending":
+      return "等待中";
+    default:
+      return status || "未知";
+  }
 }
 
 async function copyToClipboard(text) {
