@@ -20,6 +20,7 @@ type frontendConfig struct {
 	ManagerBaseURL       string `json:"managerBaseUrl"`
 	DataConnectorBaseURL string `json:"dataConnectorBaseUrl"`
 	ProxyBasePath        string `json:"proxyBasePath"`
+	DataProxyBasePath    string `json:"dataProxyBasePath"`
 	FrontendPort         string `json:"frontendPort"`
 }
 
@@ -41,10 +42,16 @@ func main() {
 
 	// fileServer := http.FileServer(http.FS(webRoot))
 	apiProxy := newManagerProxy(target)
+	dataTarget, err := url.Parse(dataConnectorBaseURL)
+	if err != nil || dataTarget.Scheme == "" || dataTarget.Host == "" {
+		log.Fatalf("invalid DATA_CONNECTOR_BASE_URL %q", dataConnectorBaseURL)
+	}
+	dataProxy := newPathProxy("/connector", dataTarget, "data-connector")
 
 	mux := http.NewServeMux()
 
 	mux.Handle("/api/", apiProxy)
+	mux.Handle("/connector/", dataProxy)
 
 	mux.HandleFunc("/app-config", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
@@ -56,12 +63,13 @@ func main() {
 			ManagerBaseURL:       managerBaseURL,
 			DataConnectorBaseURL: dataConnectorBaseURL,
 			ProxyBasePath:        "/api",
+			DataProxyBasePath:    "/connector",
 			FrontendPort:         frontendPort,
 		})
 	})
 
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		if strings.HasPrefix(r.URL.Path, "/api/") {
+		if strings.HasPrefix(r.URL.Path, "/api/") || strings.HasPrefix(r.URL.Path, "/connector/") {
 			http.NotFound(w, r)
 			return
 		}
@@ -100,7 +108,7 @@ func main() {
 	addr := ":" + frontendPort
 	log.Printf("Enclave Manager Frontend listening on http://%s%s", displayHost, addr)
 	log.Printf("Proxying /api/* to %s", managerBaseURL)
-	log.Printf("Forwarding browser data submissions to %s", dataConnectorBaseURL)
+	log.Printf("Proxying /connector/* to %s", dataConnectorBaseURL)
 
 	if err := http.ListenAndServe(addr, logRequests(mux)); err != nil {
 		log.Fatalf("frontend server failed to start: %v", err)
@@ -108,10 +116,14 @@ func main() {
 }
 
 func newManagerProxy(target *url.URL) *httputil.ReverseProxy {
+	return newPathProxy("/api", target, "enclave-manager")
+}
+
+func newPathProxy(prefix string, target *url.URL, upstreamName string) *httputil.ReverseProxy {
 	proxy := httputil.NewSingleHostReverseProxy(target)
 
 	proxy.Director = func(req *http.Request) {
-		trimmedPath := strings.TrimPrefix(req.URL.Path, "/api")
+		trimmedPath := strings.TrimPrefix(req.URL.Path, prefix)
 		if trimmedPath == "" {
 			trimmedPath = "/"
 		}
@@ -123,8 +135,8 @@ func newManagerProxy(target *url.URL) *httputil.ReverseProxy {
 	}
 
 	proxy.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
-		log.Printf("[frontend proxy] %s %s -> error: %v", r.Method, r.URL.Path, err)
-		http.Error(w, "Unable to reach enclave-manager: "+err.Error(), http.StatusBadGateway)
+		log.Printf("[frontend proxy] %s %s -> %s error: %v", r.Method, r.URL.Path, upstreamName, err)
+		http.Error(w, "Unable to reach "+upstreamName+": "+err.Error(), http.StatusBadGateway)
 	}
 
 	return proxy

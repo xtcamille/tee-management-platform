@@ -80,6 +80,7 @@ const state = {
     managerBaseUrl: "http://127.0.0.1:8081",
     dataConnectorBaseUrl: "http://127.0.0.1:8082",
     proxyBasePath: "/api",
+    dataProxyBasePath: "/connector",
     frontendPort: window.location.port || "5174",
   },
   taskOrder: [],
@@ -198,6 +199,7 @@ async function loadConfig() {
         config.dataConnectorBaseUrl ||
         deriveDataConnectorBaseURL(config.managerBaseUrl || state.config.managerBaseUrl),
       proxyBasePath: config.proxyBasePath || "/api",
+      dataProxyBasePath: config.dataProxyBasePath || "/connector",
       frontendPort: config.frontendPort || state.config.frontendPort,
     };
   } catch (error) {
@@ -320,7 +322,7 @@ async function handleDataSubmit(event) {
   const connectorUrl = getDataConnectorForwardUrl();
   elements.dataSubmitButton.disabled = true;
   elements.dataSubmitButton.textContent = "Sending data...";
-  elements.dataResult.innerHTML = `<p class="info-text">Sending Task [${escapeHTML(taskId)}] and CSV data to ${escapeHTML(connectorUrl)} ...</p>`;
+  elements.dataResult.innerHTML = `<p class="info-text">Sending Task [${escapeHTML(taskId)}] and CSV data via ${escapeHTML(connectorUrl)} ...</p>`;
 
   const formData = new FormData();
   formData.append("task_id", taskId);
@@ -592,8 +594,8 @@ function renderConnectionSummary() {
           <strong>${escapeHTML(raTlsEndpoint)}</strong>
         </div>
         <div>
-          <span>Data API</span>
-          <strong>${escapeHTML(dataConnectorUrl)}</strong>
+          <span>Data Proxy</span>
+          <strong>${escapeHTML(state.config.dataProxyBasePath || "/connector")}</strong>
         </div>
         <div>
           <span>Current Task</span>
@@ -607,8 +609,8 @@ function renderConnectionSummary() {
         </div>
       </div>
       <p>
-        The browser sends CSV data to the remote <code>data-connector</code> service, and that
-        service reaches the enclave RA-TLS endpoint on the same server.
+        The browser submits CSV data to this frontend's same-origin proxy, and the server forwards
+        it to the remote <code>data-connector</code> service for RA-TLS delivery.
       </p>
     </div>
   `;
@@ -877,8 +879,8 @@ function deriveDataConnectorBaseURL(managerBaseUrl) {
 }
 
 function getDataConnectorForwardUrl() {
-  const baseUrl = state.config.dataConnectorBaseUrl || deriveDataConnectorBaseURL(state.config.managerBaseUrl);
-  return `${String(baseUrl).replace(/\/+$/, "")}/forward`;
+  const proxyBasePath = state.config.dataProxyBasePath || "/connector";
+  return `${String(proxyBasePath).replace(/\/+$/, "")}/forward`;
 }
 
 function shortTaskId(taskId) {

@@ -14,9 +14,9 @@
         <p class="eyebrow">Step 2</p>
         <h1>Data Connector</h1>
         <p class="hero-text">
-          在这里提交业务 CSV 数据。
-          <br />
-          页面会将数据发送到远端的 <code>data-connector</code> 服务；该服务部署在与 RA-TLS 相同 IP 的服务器上，并负责继续完成到 Enclave 的安全转发。
+          在这里提交业务 CSV 数据。<br />
+          浏览器会先把请求发送到当前前端服务的同源代理，再由服务端转发给远端
+          <code>data-connector</code>，后者继续完成到 Enclave 的 RA-TLS 安全转发。
         </p>
       </div>
       <aside class="hero-side" id="connectionSummary">
@@ -30,14 +30,14 @@
           <div>
             <h2>发送安全数据</h2>
           </div>
-          <p class="panel-note">浏览器不再请求本地 127.0.0.1，而是请求远端同机 data-connector 服务。</p>
+          <p class="panel-note">浏览器只请求当前站点的同源 <code>/connector/forward</code>，不再直接访问本机或远端裸地址。</p>
         </div>
 
         <form id="dataForm" class="stack-form">
           <label class="field" for="targetUrlInput">
             <span class="field-label">目标 Task ID</span>
             <input id="targetUrlInput" type="text" placeholder="输入要发送数据的 task_id" required />
-            <span class="field-hint">从看板复制任务 ID 后粘贴到这里，前端会根据配置自动找到远端数据接口。</span>
+            <span class="field-hint">从看板复制任务 ID 后粘贴到这里，前端会通过同源代理转发到远端数据接口。</span>
           </label>
 
           <label class="field file-field" for="csvInput">
