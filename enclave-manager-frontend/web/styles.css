@@ -1,9 +1,11 @@
 :root {
   --bg: #f4ede2;
   --bg-soft: rgba(255, 248, 238, 0.82);
+  --bg-crust: rgba(248, 240, 229, 0.92);
   --surface: rgba(255, 253, 249, 0.86);
   --surface-strong: #fffaf3;
   --border: rgba(16, 52, 58, 0.12);
+  --border-subtle: rgba(16, 52, 58, 0.1);
   --text: #17363b;
   --text-muted: #5f7376;
   --accent: #0f766e;

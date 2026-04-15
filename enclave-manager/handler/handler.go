@@ -171,6 +171,8 @@ func StartEnclave(w http.ResponseWriter, r *http.Request) {
 	}
 
 	taskInfo.Status = StateStarting
+	taskInfo.Error = ""
+	taskInfo.Port = 0
 
 	// This starts the Go-based Enclave App inside Occlum, which handles RA-TLS
 	port, cancel, err := occlum.Start(req.TaskID, taskInfo.CodePath)
@@ -183,6 +185,7 @@ func StartEnclave(w http.ResponseWriter, r *http.Request) {
 
 	taskInfo.Status = StateRunning
 	taskInfo.Port = port
+	taskInfo.Error = ""
 	taskInfo.StopFunc = cancel
 
 	w.Header().Set("Content-Type", "application/json")

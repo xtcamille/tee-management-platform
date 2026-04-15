@@ -17,13 +17,15 @@ import (
 var webFiles embed.FS
 
 type frontendConfig struct {
-	ManagerBaseURL string `json:"managerBaseUrl"`
-	ProxyBasePath  string `json:"proxyBasePath"`
-	FrontendPort   string `json:"frontendPort"`
+	ManagerBaseURL       string `json:"managerBaseUrl"`
+	DataConnectorBaseURL string `json:"dataConnectorBaseUrl"`
+	ProxyBasePath        string `json:"proxyBasePath"`
+	FrontendPort         string `json:"frontendPort"`
 }
 
 func main() {
 	managerBaseURL := getenv("MANAGER_BASE_URL", "http://192.168.0.248:8081")
+	dataConnectorBaseURL := getenv("DATA_CONNECTOR_BASE_URL", deriveDataConnectorBaseURL(managerBaseURL, "8082"))
 	frontendPort := getenv("PORT", "5174")
 
 	target, err := url.Parse(managerBaseURL)
@@ -50,9 +52,10 @@ func main() {
 		}
 
 		writeJSON(w, http.StatusOK, frontendConfig{
-			ManagerBaseURL: managerBaseURL,
-			ProxyBasePath:  "/api",
-			FrontendPort:   frontendPort,
+			ManagerBaseURL:       managerBaseURL,
+			DataConnectorBaseURL: dataConnectorBaseURL,
+			ProxyBasePath:        "/api",
+			FrontendPort:         frontendPort,
 		})
 	})
 
@@ -133,6 +136,23 @@ func joinURLPath(basePath string, relativePath string) string {
 		return relativePath
 	}
 	return strings.TrimRight(basePath, "/") + "/" + strings.TrimLeft(relativePath, "/")
+}
+
+func deriveDataConnectorBaseURL(managerBaseURL string, defaultPort string) string {
+	target, err := url.Parse(managerBaseURL)
+	if err != nil || target.Hostname() == "" {
+		return "http://127.0.0.1:" + defaultPort
+	}
+
+	scheme := target.Scheme
+	if scheme == "" {
+		scheme = "http"
+	}
+
+	return (&url.URL{
+		Scheme: scheme,
+		Host:   target.Hostname() + ":" + defaultPort,
+	}).String()
 }
 
 func writeJSON(w http.ResponseWriter, statusCode int, payload interface{}) {

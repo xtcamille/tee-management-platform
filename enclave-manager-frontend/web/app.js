@@ -8,7 +8,7 @@ const STATUS_META = {
   UNKNOWN: {
     label: "等待同步",
     tone: "muted",
-    description: "任务已加入看板，但还没有从 Manager 拉到有效状态。",
+    description: "任务已经加入看板，但还没有从 Manager 拉取到有效状态。",
   },
   MISSING: {
     label: "任务不存在",
@@ -26,19 +26,19 @@ const STATUS_META = {
     description: "Manager 正在初始化 Occlum 环境并拉起 Enclave 进程。",
   },
   ENCLAVE_RUNNING: {
-    label: "Enclave 已运行",
+    label: "Enclave 运行中",
     tone: "success",
-    description: "Enclave 已启动完成，RA-TLS 端口已经分配，可以等待 Data Connector 接入。",
+    description: "Enclave 已启动完成，RA-TLS 端口已分配，可以等待 Data Connector 接入。",
   },
   DATA_RECEIVED: {
     label: "已收到数据",
     tone: "warning",
-    description: "Data Connector 已经通过 RA-TLS 把数据送入 Enclave，任务正在处理。",
+    description: "Data Connector 已通过 RA-TLS 把数据送入 Enclave，任务正在处理中。",
   },
   DONE: {
     label: "任务完成",
     tone: "success",
-    description: "Enclave 已处理完数据，结果已返回给 Data Connector。",
+    description: "Enclave 已完成数据处理，结果已经返回给 Data Connector。",
   },
   FAILED: {
     label: "任务失败",
@@ -61,23 +61,24 @@ const TIMELINE_STEPS = [
   {
     key: "ENCLAVE_RUNNING",
     title: "进入可连接状态",
-    note: "已启动环境，Data Connector 可准备连接。",
+    note: "Enclave 已启动，Data Connector 可以开始连接。",
   },
   {
     key: "DATA_RECEIVED",
     title: "接收安全数据",
-    note: "Data Connector 已经通过 RA-TLS 把数据送入 Enclave，任务正在处理。",
+    note: "Data Connector 已通过 RA-TLS 将数据送入 Enclave，任务正在处理。",
   },
   {
     key: "DONE",
     title: "完成处理",
-    note: "结果已经回传，任务流进入完成状态。",
+    note: "处理结果已经回传，任务流进入完成状态。",
   },
 ];
 
 const state = {
   config: {
     managerBaseUrl: "http://127.0.0.1:8081",
+    dataConnectorBaseUrl: "http://127.0.0.1:8082",
     proxyBasePath: "/api",
     frontendPort: window.location.port || "5174",
   },
@@ -118,7 +119,8 @@ async function init() {
 }
 
 function cacheDom() {
-  const q = (s) => document.querySelector(s);
+  const q = (selector) => document.querySelector(selector);
+
   elements.connectionSummary = q("#connectionSummary");
   elements.uploadForm = q("#uploadForm");
   elements.archiveInput = q("#archiveInput");
@@ -130,7 +132,6 @@ function cacheDom() {
   elements.recentTasksList = q("#recentTasksList");
   elements.nextStepsPanel = q("#nextStepsPanel");
   elements.toastRegion = q("#toastRegion");
-  // Data connector
   elements.dataForm = q("#dataForm");
   elements.targetUrlInput = q("#targetUrlInput");
   elements.csvInput = q("#csvInput");
@@ -139,9 +140,15 @@ function cacheDom() {
 }
 
 function bindEvents() {
-  if (elements.uploadForm) elements.uploadForm.addEventListener("submit", handleUploadSubmit);
-  if (elements.trackForm) elements.trackForm.addEventListener("submit", handleTrackSubmit);
-  if (elements.dataForm) elements.dataForm.addEventListener("submit", handleDataSubmit);
+  if (elements.uploadForm) {
+    elements.uploadForm.addEventListener("submit", handleUploadSubmit);
+  }
+  if (elements.trackForm) {
+    elements.trackForm.addEventListener("submit", handleTrackSubmit);
+  }
+  if (elements.dataForm) {
+    elements.dataForm.addEventListener("submit", handleDataSubmit);
+  }
 
   document.body.addEventListener("click", async (event) => {
     const actionButton = event.target.closest("[data-action]");
@@ -187,6 +194,9 @@ async function loadConfig() {
     const config = await request("/app-config");
     state.config = {
       managerBaseUrl: config.managerBaseUrl || state.config.managerBaseUrl,
+      dataConnectorBaseUrl:
+        config.dataConnectorBaseUrl ||
+        deriveDataConnectorBaseURL(config.managerBaseUrl || state.config.managerBaseUrl),
       proxyBasePath: config.proxyBasePath || "/api",
       frontendPort: config.frontendPort || state.config.frontendPort,
     };
@@ -222,7 +232,7 @@ function createTaskShell(taskId) {
 async function handleUploadSubmit(event) {
   event.preventDefault();
 
-  const file = elements.archiveInput.files[0];
+  const file = elements.archiveInput?.files?.[0];
   if (!file) {
     showToast("请先选择一个 tar.gz 文件。", "error");
     return;
@@ -244,12 +254,16 @@ async function handleUploadSubmit(event) {
 
     const taskId = uploadResult.task_id;
     rememberTask(taskId);
-    applyTaskPatch(taskId, {
-      status: "CODE_UPLOADED",
-      error: "",
-      port: null,
-      lastSyncedAt: Date.now(),
-    }, "代码包上传成功");
+    applyTaskPatch(
+      taskId,
+      {
+        status: "CODE_UPLOADED",
+        error: "",
+        port: null,
+        lastSyncedAt: Date.now(),
+      },
+      "代码包上传成功",
+    );
     setSelectedTask(taskId);
     elements.archiveInput.value = "";
 
@@ -295,43 +309,42 @@ async function handleTrackSubmit(event) {
 async function handleDataSubmit(event) {
   event.preventDefault();
 
-  const file = elements.csvInput.files[0];
-  const taskId = elements.targetUrlInput.value.trim();
+  const file = elements.csvInput?.files?.[0];
+  const taskId = elements.targetUrlInput?.value.trim();
 
   if (!file || !taskId) {
-    showToast("请填写完整的 Task ID 并选择数据文件。", "error");
+    showToast("Please provide both Task ID and CSV file.", "error");
     return;
   }
 
+  const connectorUrl = getDataConnectorForwardUrl();
   elements.dataSubmitButton.disabled = true;
-  elements.dataSubmitButton.textContent = "正在经本地代理发送...";
-  elements.dataResult.innerHTML = `<p class="info-text">正在将 Task [${escapeHTML(taskId)}] 和安全数据推送给数据连接器服务...</p>`;
+  elements.dataSubmitButton.textContent = "Sending data...";
+  elements.dataResult.innerHTML = `<p class="info-text">Sending Task [${escapeHTML(taskId)}] and CSV data to ${escapeHTML(connectorUrl)} ...</p>`;
 
   const formData = new FormData();
   formData.append("task_id", taskId);
   formData.append("file", file);
 
   try {
-    const rawResponse = await fetch("http://127.0.0.1:8082/forward", {
+    const rawResponse = await fetch(connectorUrl, {
       method: "POST",
       body: formData,
-      // Do not manually set Content-Type for FormData, fetch automatically calculates boundary
     });
 
     const textResult = await rawResponse.text();
-
     if (!rawResponse.ok) {
       throw new Error(`Proxy Error (${rawResponse.status}): ${textResult}`);
     }
 
-    elements.dataResult.innerHTML = `<h3>Enclave 运算结果:</h3><pre>${escapeHTML(textResult)}</pre>`;
-    showToast("数据处理成功！");
+    elements.dataResult.innerHTML = `<h3>Enclave result</h3><pre>${escapeHTML(textResult)}</pre>`;
+    showToast("Data processed successfully.");
   } catch (error) {
-    elements.dataResult.innerHTML = `<p class="task-error">请求失败: ${escapeHTML(error.message)}</p>`;
-    showToast(`数据发送失败：${error.message}`, "error");
+    elements.dataResult.innerHTML = `<p class="task-error">Request failed: ${escapeHTML(error.message)}</p>`;
+    showToast(`Data submission failed: ${error.message}`, "error");
   } finally {
     elements.dataSubmitButton.disabled = false;
-    elements.dataSubmitButton.textContent = "安全注入数据并获取结果";
+    elements.dataSubmitButton.textContent = "Secure Submit";
   }
 }
 
@@ -353,25 +366,33 @@ async function startTask(taskId) {
       body: JSON.stringify({ task_id: taskId }),
     });
 
-    applyTaskPatch(taskId, {
-      status: "ENCLAVE_RUNNING",
-      port: startResult.port || null,
-      error: "",
-      uiPending: false,
-      lastSyncedAt: Date.now(),
-      lastNonFailedStatus: "ENCLAVE_RUNNING",
-    }, `Enclave 已启动，端口 ${startResult.port}`);
+    applyTaskPatch(
+      taskId,
+      {
+        status: "ENCLAVE_RUNNING",
+        port: startResult.port || null,
+        error: "",
+        uiPending: false,
+        lastSyncedAt: Date.now(),
+        lastNonFailedStatus: "ENCLAVE_RUNNING",
+      },
+      `Enclave 已启动，端口 ${startResult.port}`,
+    );
 
     showToast(`Enclave 已启动，RA-TLS 端口 ${startResult.port}。`);
     await refreshTask(taskId, { silent: true }).catch(() => undefined);
   } catch (error) {
-    applyTaskPatch(taskId, {
-      status: "FAILED",
-      error: error.message,
-      uiPending: false,
-      lastSyncedAt: Date.now(),
-      lastNonFailedStatus: currentTask.lastNonFailedStatus || "CODE_UPLOADED",
-    }, `启动失败：${error.message}`);
+    applyTaskPatch(
+      taskId,
+      {
+        status: "FAILED",
+        error: error.message,
+        uiPending: false,
+        lastSyncedAt: Date.now(),
+        lastNonFailedStatus: currentTask.lastNonFailedStatus || "CODE_UPLOADED",
+      },
+      `启动失败：${error.message}`,
+    );
 
     showToast(`启动失败：${error.message}`, "error");
   }
@@ -379,11 +400,7 @@ async function startTask(taskId) {
 
 async function refreshTasks(taskIds, options = {}) {
   const uniqueTaskIds = [...new Set(taskIds)].filter(Boolean);
-  await Promise.all(
-    uniqueTaskIds.map((taskId) =>
-      refreshTask(taskId, options).catch(() => undefined),
-    ),
-  );
+  await Promise.all(uniqueTaskIds.map((taskId) => refreshTask(taskId, options).catch(() => undefined)));
 }
 
 async function refreshTask(taskId, { silent = false } = {}) {
@@ -392,11 +409,8 @@ async function refreshTask(taskId, { silent = false } = {}) {
 
     const existingTask = ensureTask(taskId);
     const nextStatus = task.status || existingTask.status || "UNKNOWN";
-    const normalizedError = typeof task.error === "string"
-      ? task.error
-      : nextStatus === "FAILED"
-        ? existingTask.error
-        : "";
+    const normalizedError =
+      typeof task.error === "string" ? task.error : nextStatus === "FAILED" ? existingTask.error : "";
 
     const patch = {
       ...task,
@@ -415,12 +429,16 @@ async function refreshTask(taskId, { silent = false } = {}) {
     }
   } catch (error) {
     if (error.message === "Task not found") {
-      applyTaskPatch(taskId, {
-        status: "MISSING",
-        error: "Manager 中未找到该任务，可能已过期或服务已重启。",
-        lastSyncedAt: Date.now(),
-        uiPending: false,
-      }, "Manager 中未找到该任务");
+      applyTaskPatch(
+        taskId,
+        {
+          status: "MISSING",
+          error: "Manager 中未找到该任务，可能已经过期或服务已重启。",
+          lastSyncedAt: Date.now(),
+          uiPending: false,
+        },
+        "Manager 中未找到该任务",
+      );
 
       if (!silent) {
         showToast(`任务 ${shortTaskId(taskId)} 已不存在。`, "error");
@@ -515,14 +533,28 @@ function persistState() {
 }
 
 function render() {
-  if (elements.connectionSummary) renderConnectionSummary();
-  if (elements.uploadForm) renderUploadButtons();
-  if (elements.selectedTaskPanel) renderSelectedTask();
-  if (elements.recentTasksList) renderRecentTasks();
-  if (elements.nextStepsPanel) renderNextSteps();
+  if (elements.connectionSummary) {
+    renderConnectionSummary();
+  }
+  if (elements.uploadForm) {
+    renderUploadButtons();
+  }
+  if (elements.selectedTaskPanel) {
+    renderSelectedTask();
+  }
+  if (elements.recentTasksList) {
+    renderRecentTasks();
+  }
+  if (elements.nextStepsPanel) {
+    renderNextSteps();
+  }
 }
 
 function renderUploadButtons() {
+  if (!elements.uploadAndStartButton || !elements.uploadOnlyButton) {
+    return;
+  }
+
   const busyIntent = state.activeUploadIntent;
 
   elements.uploadAndStartButton.disabled = state.uploadBusy;
@@ -540,39 +572,43 @@ function renderConnectionSummary() {
 
   const managerUrl = parseManagerUrl(state.config.managerBaseUrl);
   const managerHost = managerUrl ? managerUrl.hostname : "127.0.0.1";
-  const raTlsEndpoint = selectedTask && selectedTask.port ? `${managerHost}:${selectedTask.port}` : "未分配";
+  const raTlsEndpoint = selectedTask && selectedTask.port ? `${managerHost}:${selectedTask.port}` : "pending";
+  const dataConnectorUrl =
+    state.config.dataConnectorBaseUrl || deriveDataConnectorBaseURL(state.config.managerBaseUrl);
 
   elements.connectionSummary.innerHTML = `
     <div class="connection-card">
       <div class="connection-row">
         <div>
           <p class="panel-kicker">Proxy Route</p>
-          <h3>当前连线</h3>
+          <h3>Current Route</h3>
         </div>
-        <span class="status-badge tone-${selectedMeta.tone}">${escapeHTML(selectedTask ? selectedMeta.label : "尚未选择任务")}</span>
+        <span class="status-badge tone-${selectedMeta.tone}">${escapeHTML(selectedTask ? selectedMeta.label : "No task selected")}</span>
       </div>
       <div class="connection-route">${escapeHTML(state.config.managerBaseUrl)}</div>
       <div class="connection-grid">
         <div>
-          <span>RA-TLS 入口</span>
+          <span>RA-TLS Endpoint</span>
           <strong>${escapeHTML(raTlsEndpoint)}</strong>
         </div>
         <div>
-          <span>当前任务</span>
-          <strong 
-            ${selectedTask ? `data-action="copy-text" data-copy-text="${encodeURIComponent(selectedTask.task_id)}" style="cursor: pointer; text-decoration: underline dotted; text-underline-offset: 4px;" title="点击复制 Task ID"` : ""}
-          >
-            ${escapeHTML(selectedTask ? selectedTask.task_id : "暂无")}
+          <span>Data API</span>
+          <strong>${escapeHTML(dataConnectorUrl)}</strong>
+        </div>
+        <div>
+          <span>Current Task</span>
+          <strong ${selectedTask ? `data-action="copy-text" data-copy-text="${encodeCopy(selectedTask.task_id)}" style="cursor: pointer; text-decoration: underline dotted; text-underline-offset: 4px;" title="Click to copy Task ID"` : ""}>
+            ${escapeHTML(selectedTask ? selectedTask.task_id : "N/A")}
           </strong>
         </div>
         <div>
-          <span>看板任务数</span>
+          <span>Tracked Tasks</span>
           <strong>${state.taskOrder.length}</strong>
         </div>
       </div>
       <p>
-        浏览器页面负责上传与编排；真正的数据安全传输仍通过 <code>data-connector</code> 和
-        Enclave 里的 RA-TLS 服务完成。
+        The browser sends CSV data to the remote <code>data-connector</code> service, and that
+        service reaches the enclave RA-TLS endpoint on the same server.
       </p>
     </div>
   `;
@@ -584,7 +620,7 @@ function renderSelectedTask() {
     elements.selectedTaskPanel.innerHTML = `
       <div class="empty-state">
         <h3>还没有选中任务</h3>
-        <p>上传一个新的 Enclave 包，或把已有 task_id 加入看板后即可查看详情。</p>
+        <p>上传一个新的 Enclave 包，或者把已有 task_id 加入看板后即可查看详情。</p>
       </div>
     `;
     return;
@@ -593,14 +629,19 @@ function renderSelectedTask() {
   const meta = getStatusMeta(task.status);
   const canStart = ["CODE_UPLOADED", "FAILED", "DONE", "ENCLAVE_RUNNING"].includes(task.status);
   const startButtonText = task.status === "CODE_UPLOADED" ? "启动 Enclave" : "重新启动";
-  const events = task.events.length > 0
-    ? task.events.map((item) => `
+  const events =
+    task.events.length > 0
+      ? task.events
+          .map(
+            (item) => `
         <div class="event-row">
           <span>${escapeHTML(item.message)}</span>
           <time>${escapeHTML(formatTime(item.timestamp))}</time>
         </div>
-      `).join("")
-    : `
+      `,
+          )
+          .join("")
+      : `
       <div class="event-row">
         <span>暂无本地事件记录，等待下一次操作或同步。</span>
         <time>--:--:--</time>
@@ -635,7 +676,7 @@ function renderSelectedTask() {
       <div class="detail-card">
         <span>RA-TLS 端口</span>
         <strong>${escapeHTML(task.port ? String(task.port) : "未分配")}</strong>
-        <p>只有启动成功后才会得到动态端口。</p>
+        <p>只有启动成功后才会获得动态端口。</p>
       </div>
       <div class="detail-card">
         <span>最近同步</span>
@@ -702,38 +743,40 @@ function renderRecentTasks() {
     return;
   }
 
-  elements.recentTasksList.innerHTML = state.taskOrder.map((taskId) => {
-    const task = ensureTask(taskId);
-    const meta = getStatusMeta(task.status);
-    const isSelected = taskId === state.selectedTaskId;
+  elements.recentTasksList.innerHTML = state.taskOrder
+    .map((taskId) => {
+      const task = ensureTask(taskId);
+      const meta = getStatusMeta(task.status);
+      const isSelected = taskId === state.selectedTaskId;
 
-    return `
-      <article class="task-card ${isSelected ? "selected" : ""}" data-action="select-task" data-task-id="${escapeHTML(task.task_id)}" style="cursor: pointer;">
-        <div class="task-card-head">
-          <div>
-            <h3>${escapeHTML(shortTaskId(task.task_id))}</h3>
-            <p>${escapeHTML(task.task_id)}</p>
+      return `
+        <article class="task-card ${isSelected ? "selected" : ""}" data-action="select-task" data-task-id="${escapeHTML(task.task_id)}" style="cursor: pointer;">
+          <div class="task-card-head">
+            <div>
+              <h3>${escapeHTML(shortTaskId(task.task_id))}</h3>
+              <p>${escapeHTML(task.task_id)}</p>
+            </div>
+            <span class="status-badge tone-${meta.tone}">${escapeHTML(meta.label)}</span>
           </div>
-          <span class="status-badge tone-${meta.tone}">${escapeHTML(meta.label)}</span>
-        </div>
 
-        <div class="task-meta">
-          <span>端口：${escapeHTML(task.port ? String(task.port) : "未分配")}</span>
-          <span>同步：${escapeHTML(task.lastSyncedAt ? formatTime(task.lastSyncedAt) : "未同步")}</span>
-        </div>
+          <div class="task-meta">
+            <span>端口：${escapeHTML(task.port ? String(task.port) : "未分配")}</span>
+            <span>同步：${escapeHTML(task.lastSyncedAt ? formatTime(task.lastSyncedAt) : "未同步")}</span>
+          </div>
 
-        ${task.error ? `<p class="task-error">${escapeHTML(task.error)}</p>` : ""}
+          ${task.error ? `<p class="task-error">${escapeHTML(task.error)}</p>` : ""}
 
-        <div class="task-card-actions">
-          <button class="button-subtle" data-action="select-task" data-task-id="${escapeHTML(task.task_id)}">
-            ${isSelected ? "当前查看中" : "查看详情"}
-          </button>
-          <button class="button-subtle" data-action="refresh-task" data-task-id="${escapeHTML(task.task_id)}">刷新</button>
-          <button class="button-subtle" data-action="remove-task" data-task-id="${escapeHTML(task.task_id)}">移除</button>
-        </div>
-      </article>
-    `;
-  }).join("");
+          <div class="task-card-actions">
+            <button class="button-subtle" data-action="select-task" data-task-id="${escapeHTML(task.task_id)}">
+              ${isSelected ? "当前查看中" : "查看详情"}
+            </button>
+            <button class="button-subtle" data-action="refresh-task" data-task-id="${escapeHTML(task.task_id)}">刷新</button>
+            <button class="button-subtle" data-action="remove-task" data-task-id="${escapeHTML(task.task_id)}">移除</button>
+          </div>
+        </article>
+      `;
+    })
+    .join("");
 }
 
 function renderNextSteps() {
@@ -782,7 +825,7 @@ function renderNextSteps() {
         <div class="snippet-head">
           <div>
             <h3>通过 Data Connector 发送数据</h3>
-            <p>浏览器页面不直接接管 RA-TLS；真正的数据注入仍建议使用仓库里的客户端。</p>
+            <p>浏览器页面不直接接管 RA-TLS，真正的数据注入仍建议使用仓库里的客户端。</p>
           </div>
           <div class="snippet-actions">
             <button class="button-subtle" data-action="copy-text" data-copy-text="${encodeCopy(dataCommand)}">复制命令</button>
@@ -796,8 +839,8 @@ function renderNextSteps() {
       <h3>使用提醒</h3>
       <p>
         当前 <code>enclave-manager</code> 的 <code>/process-data</code> 已废弃，数据处理改为由
-        <code>data-connector</code> 直接通过 RA-TLS 连接到 Enclave 的动态端口。
-        因此这个前端页主要用于任务发布、状态观察和操作引导，而不是替代安全数据通道。
+        <code>data-connector</code> 直接通过 RA-TLS 连接到 Enclave 的动态端口。因此这个前端页面主要用于任务发布、
+        状态观察和操作引导，而不是替代安全数据通道。
       </p>
     </article>
   `;
@@ -821,6 +864,21 @@ function parseManagerUrl(rawUrl) {
   } catch (_error) {
     return null;
   }
+}
+
+function deriveDataConnectorBaseURL(managerBaseUrl) {
+  const managerUrl = parseManagerUrl(managerBaseUrl);
+  if (!managerUrl || !managerUrl.hostname) {
+    return "http://127.0.0.1:8082";
+  }
+
+  const scheme = managerUrl.protocol || "http:";
+  return `${scheme}//${managerUrl.hostname}:8082`;
+}
+
+function getDataConnectorForwardUrl() {
+  const baseUrl = state.config.dataConnectorBaseUrl || deriveDataConnectorBaseURL(state.config.managerBaseUrl);
+  return `${String(baseUrl).replace(/\/+$/, "")}/forward`;
 }
 
 function shortTaskId(taskId) {
@@ -869,9 +927,10 @@ async function request(url, options = {}) {
   }
 
   if (!response.ok) {
-    const message = typeof parsedBody === "string"
-      ? parsedBody
-      : parsedBody?.error || parsedBody?.message || `请求失败 (${response.status})`;
+    const message =
+      typeof parsedBody === "string"
+        ? parsedBody
+        : parsedBody?.error || parsedBody?.message || `请求失败 (${response.status})`;
 
     if (response.status === 404 && /task not found/i.test(String(message))) {
       throw new Error("Task not found");
@@ -906,6 +965,10 @@ async function copyToClipboard(text) {
 }
 
 function showToast(message, tone = "info") {
+  if (!elements.toastRegion) {
+    return;
+  }
+
   const toast = document.createElement("div");
   toast.className = `toast ${tone === "error" ? "error" : ""}`.trim();
   toast.textContent = message;

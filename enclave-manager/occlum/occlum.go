@@ -2,17 +2,21 @@ package occlum
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"io"
 	"io/ioutil"
 	"log"
 	"net"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"tee-management-platform/internal/ratls"
+	"time"
 )
 
 func getFreePort() (int, error) {
@@ -85,6 +89,7 @@ func Start(taskID string, uploadedCodePath string) (int, context.CancelFunc, err
 	log.Printf("[Occlum] Stage 4/4: starting enclave process in background")
 
 	ctx, cancel := context.WithCancel(context.Background())
+	processExit := make(chan error, 1)
 
 	go func() {
 		log.Println("[Occlum] Running enclave process: occlum run /bin/enclave-app")
@@ -94,13 +99,77 @@ func Start(taskID string, uploadedCodePath string) (int, context.CancelFunc, err
 		cmdRun.Stderr = os.Stderr
 		if err := cmdRun.Run(); err != nil {
 			log.Printf("[Occlum] Enclave process exited with error: %v", err)
+			processExit <- err
 			return
 		}
 		log.Printf("[Occlum] Enclave process exited successfully")
+		processExit <- nil
 	}()
 
-	log.Printf("[Occlum] Stage 4/4 completed: enclave process launched, RA-TLS port=%d", port)
+	if err := waitForRATLSReady(ctx, port, processExit); err != nil {
+		cancel()
+		return 0, nil, err
+	}
+
+	log.Printf("[Occlum] Stage 4/4 completed: enclave process ready, RA-TLS port=%d", port)
 	return port, cancel, nil
+}
+
+func waitForRATLSReady(ctx context.Context, port int, processExit <-chan error) error {
+	const (
+		startupTimeout = 60 * time.Second
+		retryInterval  = 500 * time.Millisecond
+		requestTimeout = 3 * time.Second
+	)
+
+	deadlineCtx, cancel := context.WithTimeout(ctx, startupTimeout)
+	defer cancel()
+
+	client := &http.Client{
+		Timeout: requestTimeout,
+		Transport: &http.Transport{
+			TLSClientConfig: &tls.Config{
+				InsecureSkipVerify:    true,
+				VerifyPeerCertificate: ratls.VerifyPeerCertificate,
+				MinVersion:            tls.VersionTLS13,
+			},
+		},
+	}
+	defer client.CloseIdleConnections()
+
+	endpoint := fmt.Sprintf("https://127.0.0.1:%d/data", port)
+	ticker := time.NewTicker(retryInterval)
+	defer ticker.Stop()
+
+	var lastErr error
+	for {
+		req, err := http.NewRequestWithContext(deadlineCtx, http.MethodGet, endpoint, nil)
+		if err != nil {
+			return fmt.Errorf("failed to build RA-TLS readiness probe: %w", err)
+		}
+
+		resp, err := client.Do(req)
+		if err == nil {
+			resp.Body.Close()
+			log.Printf("[Occlum] RA-TLS readiness probe succeeded: endpoint=%s status=%d", endpoint, resp.StatusCode)
+			return nil
+		}
+		lastErr = err
+
+		select {
+		case exitErr := <-processExit:
+			if exitErr != nil {
+				return fmt.Errorf("enclave process exited before RA-TLS became ready: %w", exitErr)
+			}
+			return fmt.Errorf("enclave process exited before RA-TLS became ready")
+		case <-deadlineCtx.Done():
+			if lastErr != nil {
+				return fmt.Errorf("timed out waiting for RA-TLS readiness on %s: %w", endpoint, lastErr)
+			}
+			return fmt.Errorf("timed out waiting for RA-TLS readiness on %s", endpoint)
+		case <-ticker.C:
+		}
+	}
 }
 
 func execCmd(dir string, name string, args ...string) error {
