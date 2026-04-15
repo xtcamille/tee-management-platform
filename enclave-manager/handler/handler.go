@@ -32,12 +32,14 @@ const (
 )
 
 type TaskInfo struct {
+	mu       sync.RWMutex       `json:"-"`
 	ID       string             `json:"task_id"`
 	Status   TaskState          `json:"status"`
 	CodePath string             `json:"-"`
 	Port     int                `json:"port,omitempty"`
 	Error    string             `json:"error,omitempty"`
 	StopFunc context.CancelFunc `json:"-"`
+	Version  int64              `json:"-"`
 }
 
 func UploadCode(w http.ResponseWriter, r *http.Request) {
@@ -164,36 +166,85 @@ func StartEnclave(w http.ResponseWriter, r *http.Request) {
 	taskInfo := taskInfoAny.(*TaskInfo)
 
 	// If a user restarts a task that hasn't finished, forcefully kill the running process first.
-	if taskInfo.StopFunc != nil {
-		log.Printf("[StartEnclave] Task %s is being restarted. Shutting down existing enclave process.", req.TaskID)
-		taskInfo.StopFunc()
-		taskInfo.StopFunc = nil
-	}
-
+	taskInfo.mu.Lock()
+	existingStop := taskInfo.StopFunc
+	taskInfo.StopFunc = nil
+	taskInfo.Version++
+	startVersion := taskInfo.Version
 	taskInfo.Status = StateStarting
 	taskInfo.Error = ""
 	taskInfo.Port = 0
+	taskInfo.mu.Unlock()
+
+	if existingStop != nil {
+		log.Printf("[StartEnclave] Task %s is being restarted. Shutting down existing enclave process.", req.TaskID)
+		existingStop()
+	}
 
 	// This starts the Go-based Enclave App inside Occlum, which handles RA-TLS
-	port, cancel, err := occlum.Start(req.TaskID, taskInfo.CodePath)
+	taskInfo.mu.RLock()
+	codePath := taskInfo.CodePath
+	taskInfo.mu.RUnlock()
+
+	port, cancel, readinessCh, err := occlum.Start(req.TaskID, codePath)
+	if err != nil {
+		taskInfo.mu.Lock()
+		taskInfo.Status = StateFailed
+		taskInfo.Error = err.Error()
+		taskInfo.Port = 0
+		taskInfo.mu.Unlock()
+		http.Error(w, fmt.Sprintf("Failed to start enclave: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	taskInfo.mu.Lock()
+	taskInfo.Status = StateStarting
+	taskInfo.Port = port
+	taskInfo.Error = ""
+	taskInfo.StopFunc = cancel
+	taskInfo.mu.Unlock()
+
+	go trackRATLSReadiness(req.TaskID, taskInfo, startVersion, port, readinessCh)
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"status":  "starting",
+		"task_id": req.TaskID,
+		"port":    port,
+	})
+}
+
+func trackRATLSReadiness(taskID string, taskInfo *TaskInfo, startVersion int64, port int, readinessCh <-chan error) {
+	err, ok := <-readinessCh
+	if !ok {
+		return
+	}
+
+	taskInfo.mu.Lock()
+	defer taskInfo.mu.Unlock()
+
+	if taskInfo.Version != startVersion {
+		log.Printf("[StartEnclave] Ignoring stale RA-TLS readiness result for task %s (version=%d current=%d)", taskID, startVersion, taskInfo.Version)
+		return
+	}
+
 	if err != nil {
 		taskInfo.Status = StateFailed
 		taskInfo.Error = err.Error()
-		http.Error(w, fmt.Sprintf("Failed to start enclave: %v", err), http.StatusInternalServerError)
+		taskInfo.Port = port
+		stopFunc := taskInfo.StopFunc
+		taskInfo.StopFunc = nil
+		if stopFunc != nil {
+			go stopFunc()
+		}
+		log.Printf("[StartEnclave] Task %s failed before RA-TLS became reachable: %v", taskID, err)
 		return
 	}
 
 	taskInfo.Status = StateRunning
 	taskInfo.Port = port
 	taskInfo.Error = ""
-	taskInfo.StopFunc = cancel
-
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{
-		"status":  "success",
-		"task_id": req.TaskID,
-		"port":    port,
-	})
+	log.Printf("[StartEnclave] Task %s RA-TLS is reachable. Status -> %s", taskID, StateRunning)
 }
 
 func GetTaskStatus(w http.ResponseWriter, r *http.Request) {
@@ -211,13 +262,20 @@ func GetTaskStatus(w http.ResponseWriter, r *http.Request) {
 	taskInfo := taskInfoAny.(*TaskInfo)
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(taskInfo)
+	json.NewEncoder(w).Encode(taskInfo.snapshot())
 }
 
-type CallbackRequest struct {
-	TaskID string    `json:"task_id"`
-	Status TaskState `json:"status"`
-	Error  string    `json:"error,omitempty"`
+func (t *TaskInfo) snapshot() *TaskInfo {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+
+	return &TaskInfo{
+		ID:       t.ID,
+		Status:   t.Status,
+		CodePath: t.CodePath,
+		Port:     t.Port,
+		Error:    t.Error,
+	}
 }
 
 func UpdateTaskCallback(w http.ResponseWriter, r *http.Request) {
@@ -239,17 +297,22 @@ func UpdateTaskCallback(w http.ResponseWriter, r *http.Request) {
 	}
 	taskInfo := taskInfoAny.(*TaskInfo)
 
+	taskInfo.mu.Lock()
 	taskInfo.Status = req.Status
 	if req.Error != "" {
 		taskInfo.Error = req.Error
 	}
+	stopFunc := taskInfo.StopFunc
+	if req.Status == StateDone || req.Status == StateFailed {
+		taskInfo.StopFunc = nil
+	}
+	taskInfo.mu.Unlock()
 
 	log.Printf("[Callback] Task %s reached status %s", req.TaskID, req.Status)
 
-	if (req.Status == StateDone || req.Status == StateFailed) && taskInfo.StopFunc != nil {
+	if (req.Status == StateDone || req.Status == StateFailed) && stopFunc != nil {
 		log.Printf("[Callback] Final state reached. Instructing enclave to shutdown for task %s", req.TaskID)
-		taskInfo.StopFunc()
-		taskInfo.StopFunc = nil
+		stopFunc()
 
 		// Cleanup Workspace Environment
 		go func(id string) {
@@ -264,8 +327,16 @@ func UpdateTaskCallback(w http.ResponseWriter, r *http.Request) {
 		}(req.TaskID)
 	}
 
-	w.WriteHeader(http.StatusOK)
-	w.Write([]byte("OK"))
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"status": "success",
+	})
+}
+
+type CallbackRequest struct {
+	TaskID string    `json:"task_id"`
+	Status TaskState `json:"status"`
+	Error  string    `json:"error,omitempty"`
 }
 
 // ProcessData is now handled directly between Data Connector and Enclave

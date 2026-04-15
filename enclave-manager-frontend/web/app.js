@@ -369,17 +369,17 @@ async function startTask(taskId) {
     applyTaskPatch(
       taskId,
       {
-        status: "ENCLAVE_RUNNING",
+        status: "STARTING_ENCLAVE",
         port: startResult.port || null,
         error: "",
         uiPending: false,
         lastSyncedAt: Date.now(),
-        lastNonFailedStatus: "ENCLAVE_RUNNING",
+        lastNonFailedStatus: "STARTING_ENCLAVE",
       },
-      `Enclave 已启动，端口 ${startResult.port}`,
+      `Enclave 已启动，正在等待 RA-TLS 就绪，端口 ${startResult.port}`,
     );
 
-    showToast(`Enclave 已启动，RA-TLS 端口 ${startResult.port}。`);
+    showToast(`Enclave 启动请求已提交，正在等待 RA-TLS 就绪，端口 ${startResult.port}。`);
     await refreshTask(taskId, { silent: true }).catch(() => undefined);
   } catch (error) {
     applyTaskPatch(
