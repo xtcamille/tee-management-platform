@@ -152,7 +152,8 @@ function bindEvents() {
   }
 
   document.body.addEventListener("click", async (event) => {
-    const actionButton = event.target.closest("[data-action]");
+    const clickTarget = event.target instanceof Element ? event.target : event.target?.parentElement;
+    const actionButton = clickTarget?.closest("[data-action]");
     if (!actionButton) {
       return;
     }
@@ -315,14 +316,14 @@ async function handleDataSubmit(event) {
   const taskId = elements.targetUrlInput?.value.trim();
 
   if (!file || !taskId) {
-    showToast("Please provide both Task ID and CSV file.", "error");
+    showToast("请同时提供 Task ID 和 CSV 文件。", "error");
     return;
   }
 
   const connectorUrl = getDataConnectorForwardUrl();
   elements.dataSubmitButton.disabled = true;
-  elements.dataSubmitButton.textContent = "Sending data...";
-  elements.dataResult.innerHTML = `<p class="info-text">Sending Task [${escapeHTML(taskId)}] and CSV data via ${escapeHTML(connectorUrl)} ...</p>`;
+  elements.dataSubmitButton.textContent = "正在发送数据...";
+  elements.dataResult.innerHTML = `<p class="info-text">正在通过 ${escapeHTML(connectorUrl)} 发送任务 [${escapeHTML(taskId)}] 和 CSV 数据...</p>`;
 
   const formData = new FormData();
   formData.append("task_id", taskId);
@@ -336,17 +337,17 @@ async function handleDataSubmit(event) {
 
     const textResult = await rawResponse.text();
     if (!rawResponse.ok) {
-      throw new Error(`Proxy Error (${rawResponse.status}): ${textResult}`);
+      throw new Error(`代理错误 (${rawResponse.status})：${textResult}`);
     }
 
-    elements.dataResult.innerHTML = `<h3>Enclave result</h3><pre>${escapeHTML(textResult)}</pre>`;
-    showToast("Data processed successfully.");
+    elements.dataResult.innerHTML = `<h3>Enclave 返回结果</h3><pre>${escapeHTML(textResult)}</pre>`;
+    showToast("数据处理成功。");
   } catch (error) {
-    elements.dataResult.innerHTML = `<p class="task-error">Request failed: ${escapeHTML(error.message)}</p>`;
-    showToast(`Data submission failed: ${error.message}`, "error");
+    elements.dataResult.innerHTML = `<p class="task-error">请求失败：${escapeHTML(error.message)}</p>`;
+    showToast(`数据提交失败：${error.message}`, "error");
   } finally {
     elements.dataSubmitButton.disabled = false;
-    elements.dataSubmitButton.textContent = "Secure Submit";
+    elements.dataSubmitButton.textContent = "安全提交";
   }
 }
 
@@ -574,7 +575,7 @@ function renderConnectionSummary() {
 
   const managerUrl = parseManagerUrl(state.config.managerBaseUrl);
   const managerHost = managerUrl ? managerUrl.hostname : "127.0.0.1";
-  const raTlsEndpoint = selectedTask && selectedTask.port ? `${managerHost}:${selectedTask.port}` : "pending";
+  const raTlsEndpoint = selectedTask && selectedTask.port ? `${managerHost}:${selectedTask.port}` : "等待分配";
   const dataConnectorUrl =
     state.config.dataConnectorBaseUrl || deriveDataConnectorBaseURL(state.config.managerBaseUrl);
 
@@ -582,35 +583,37 @@ function renderConnectionSummary() {
     <div class="connection-card">
       <div class="connection-row">
         <div>
-          <p class="panel-kicker">Proxy Route</p>
-          <h3>Current Route</h3>
+          <p class="panel-kicker">代理路由</p>
+          <h3>当前路由</h3>
         </div>
-        <span class="status-badge tone-${selectedMeta.tone}">${escapeHTML(selectedTask ? selectedMeta.label : "No task selected")}</span>
+        <span class="status-badge tone-${selectedMeta.tone}">${escapeHTML(selectedTask ? selectedMeta.label : "未选择任务")}</span>
       </div>
       <div class="connection-route">${escapeHTML(state.config.managerBaseUrl)}</div>
       <div class="connection-grid">
         <div>
-          <span>RA-TLS Endpoint</span>
+          <span>RA-TLS 端点</span>
           <strong>${escapeHTML(raTlsEndpoint)}</strong>
         </div>
         <div>
-          <span>Data Proxy</span>
+          <span>数据代理</span>
           <strong>${escapeHTML(state.config.dataProxyBasePath || "/connector")}</strong>
         </div>
         <div>
-          <span>Current Task</span>
-          <strong ${selectedTask ? `data-action="copy-text" data-copy-text="${encodeCopy(selectedTask.task_id)}" style="cursor: pointer; text-decoration: underline dotted; text-underline-offset: 4px;" title="Click to copy Task ID"` : ""}>
-            ${escapeHTML(selectedTask ? selectedTask.task_id : "N/A")}
-          </strong>
+          <span>当前任务</span>
+          ${
+            selectedTask
+              ? `<button class="button-subtle" data-action="copy-text" data-copy-text="${encodeCopy(selectedTask.task_id)}" title="点击复制 Task ID">${escapeHTML(selectedTask.task_id)}</button>`
+              : `<strong>无</strong>`
+          }
         </div>
         <div>
-          <span>Tracked Tasks</span>
+          <span>已跟踪任务</span>
           <strong>${state.taskOrder.length}</strong>
         </div>
       </div>
       <p>
-        The browser submits CSV data to this frontend's same-origin proxy, and the server forwards
-        it to the remote <code>data-connector</code> service for RA-TLS delivery.
+        浏览器会先把 CSV 数据提交到当前前端服务的同源代理，再由服务端转发到远端
+        <code>data-connector</code>，完成后续的 RA-TLS 投递。
       </p>
     </div>
   `;
@@ -653,7 +656,7 @@ function renderSelectedTask() {
   elements.selectedTaskPanel.innerHTML = `
     <div class="task-main-head">
       <div class="task-title">
-        <p class="panel-kicker">Focused Task</p>
+        <p class="panel-kicker">当前聚焦任务</p>
         <h3>${escapeHTML(shortTaskId(task.task_id))}</h3>
         <div class="task-id">${escapeHTML(task.task_id)}</div>
         <span class="status-badge tone-${meta.tone}">${escapeHTML(meta.label)}</span>

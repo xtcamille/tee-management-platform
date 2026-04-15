@@ -10,12 +10,12 @@
   <div class="page-shell">
     <header class="hero" style="padding-bottom: 2rem;">
       <div class="hero-copy">
-        <a href="./index.html" class="button button-ghost" style="margin-bottom: 1rem;">← 返回看板</a>
-        <p class="eyebrow">Step 1</p>
+        <a href="./index.html" class="button button-ghost" style="margin-bottom: 1rem;">返回看板</a>
+        <p class="eyebrow">步骤 1</p>
         <h1>Code Connector</h1>
         <p class="hero-text">
-          这个页面用于模拟基于 Go 的 <code>code-connector</code> 工具发布过程。<br/>
-          上传您的 <code>enclave.tar.gz</code> 镜像包便会自动登记为新任务。
+          这个页面用于模拟基于 Go 的 <code>code-connector</code> 发布流程。<br />
+          上传你的 <code>enclave.tar.gz</code> 镜像包后，系统会自动创建一个新的任务。
         </p>
       </div>
       <aside class="hero-side" id="connectionSummary">
@@ -29,16 +29,14 @@
           <div>
             <h2>发布新任务</h2>
           </div>
-          <p class="panel-note">将编译好的包含了 Linux PIE 可执行文件的 tar.gz 提供给 Manager。</p>
+          <p class="panel-note">将已编译好的、包含 Linux PIE 可执行文件的 tar.gz 上传给 Manager。</p>
         </div>
 
         <form id="uploadForm" class="stack-form">
           <label class="field file-field" for="archiveInput">
             <span class="field-label">选择 <code>enclave.tar.gz</code></span>
             <input id="archiveInput" type="file" accept=".tar.gz,.tgz,application/gzip" />
-            <span class="field-hint">
-              请确保包内包含 <code>GOOS=linux GOARCH=amd64 -buildmode=pie</code> 产物。
-            </span>
+            <span class="field-hint">请确保包内包含使用 <code>GOOS=linux GOARCH=amd64 -buildmode=pie</code> 编译出的产物。</span>
           </label>
 
           <div class="button-row">
@@ -54,10 +52,10 @@
         <div class="mini-grid" style="margin-top: 2rem;">
           <article class="mini-card">
             <h3>上传后去哪里看？</h3>
-            <p>发布成功后，这个任务会被立刻加入本地浏览器的 Task 缓存中。请返回主看板查看最新分配的端口和运行状态。</p>
+            <p>发布成功后，这个任务会立刻加入浏览器本地的任务缓存。返回主看板即可查看最新分配的端口和运行状态。</p>
           </article>
         </div>
-        
+
         <hr style="margin: 3rem 0; border: 0; border-top: 1px solid var(--border-subtle);" />
 
         <div class="subsection">
@@ -65,7 +63,7 @@
             <div>
               <h3>使用已有 Task ID</h3>
             </div>
-            <p class="panel-note">如果您从命令行生成了任务，也可以把 task_id 填入此处加入看板同步。</p>
+            <p class="panel-note">如果你已经在命令行生成了任务，也可以把 task_id 填到这里，加入看板持续同步。</p>
           </div>
           <form id="trackForm" class="inline-form">
             <label class="field" for="trackTaskId">
