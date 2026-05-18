@@ -10,6 +10,7 @@ import (
 	"io"
 	"io/ioutil"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -18,7 +19,29 @@ import (
 	"time"
 )
 
-var taskMap sync.Map // maps taskID string -> *TaskInfo
+var taskMap sync.Map     // maps taskID string -> *TaskInfo
+var contractMap sync.Map // maps contractID string -> *ContractDBEntry
+
+type ContractDBEntry struct {
+	ContractID string `json:"contractId"`
+	TaskID     string `json:"taskId"`
+	LocalIP    string `json:"localIP"`
+}
+
+func getLocalIP() string {
+	addrs, err := net.InterfaceAddrs()
+	if err != nil {
+		return "127.0.0.1"
+	}
+	for _, address := range addrs {
+		if ipnet, ok := address.(*net.IPNet); ok && !ipnet.IP.IsLoopback() {
+			if ipnet.IP.To4() != nil {
+				return ipnet.IP.String()
+			}
+		}
+	}
+	return "127.0.0.1"
+}
 
 type TaskState string
 
@@ -44,7 +67,8 @@ type TaskInfo struct {
 }
 
 func UploadCode(w http.ResponseWriter, r *http.Request) {
-	log.Printf("[UploadCode] Received POST request from %s", r.RemoteAddr)
+	contractId := r.URL.Query().Get("contractId")
+	log.Printf("[UploadCode] Received POST request from %s, contractId: %s", r.RemoteAddr, contractId)
 
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -129,6 +153,15 @@ func UploadCode(w http.ResponseWriter, r *http.Request) {
 	}
 	taskMap.Store(taskID, taskInfo)
 	log.Printf("[UploadCode] Finished processing completely: saved to %s for task %s", uploadedCodePath, taskID)
+
+	localIP := getLocalIP()
+	if contractId != "" {
+		contractMap.Store(contractId, &ContractDBEntry{
+			ContractID: contractId,
+			TaskID:     taskID,
+			LocalIP:    localIP,
+		})
+	}
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{
@@ -425,4 +458,36 @@ func stateOrder(state TaskState) int {
 // ProcessData is now handled directly between Data Connector and Enclave
 func ProcessData(w http.ResponseWriter, r *http.Request) {
 	http.Error(w, "Data processing is now handled directly via RA-TLS on port 8443. Use the Data Connector client.", http.StatusGone)
+}
+
+func GetTaskInfo(w http.ResponseWriter, r *http.Request) {
+	contractId := r.URL.Query().Get("contractId")
+	if contractId == "" {
+		http.Error(w, "Missing contractId", http.StatusBadRequest)
+		return
+	}
+
+	entryAny, ok := contractMap.Load(contractId)
+	if !ok {
+		http.Error(w, "Contract not found", http.StatusNotFound)
+		return
+	}
+	entry := entryAny.(*ContractDBEntry)
+
+	taskInfoAny, ok := taskMap.Load(entry.TaskID)
+	status := ""
+	if ok {
+		taskInfo := taskInfoAny.(*TaskInfo)
+		taskInfo.mu.RLock()
+		status = string(taskInfo.Status)
+		taskInfo.mu.RUnlock()
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{
+		"contractId": entry.ContractID,
+		"taskId":     entry.TaskID,
+		"status":     status,
+		"localIP":    entry.LocalIP,
+	})
 }

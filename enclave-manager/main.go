@@ -20,6 +20,7 @@ func main() {
 
 	mux.HandleFunc("/task-status", handler.GetTaskStatus)
 	mux.HandleFunc("/task-callback", handler.UpdateTaskCallback)
+	mux.HandleFunc("/get-task-info", handler.GetTaskInfo)
 
 	log.Println("TEE Management Platform Server starting on :8081")
 	if err := http.ListenAndServe(":8081", mux); err != nil {
