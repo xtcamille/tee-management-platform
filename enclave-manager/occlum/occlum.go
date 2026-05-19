@@ -214,10 +214,10 @@ func tuneOcclumConfig(workspace string, taskID string, port int) error {
 	process := ensureMap(config, "process")
 	env := ensureMap(config, "env")
 
-	ensureMinSize(resourceLimits, "user_space_size", "512MB")
+	ensureMinSize(resourceLimits, "user_space_size", "1400MB")
 	ensureMinInt(resourceLimits, "max_num_of_threads", 64)
 	ensureMinSize(process, "default_heap_size", "128MB")
-	ensureMinSize(process, "default_mmap_size", "256MB")
+	ensureMinSize(process, "default_mmap_size", "1024MB")
 	ensureStringListContains(config, "entry_points", "/bin")
 	ensureStringListContains(config, "entry_points", "/usr/bin")
 	ensureStringListContains(config, "entry_points", "/usr/local/bin")
