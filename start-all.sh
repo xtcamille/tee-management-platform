@@ -2,6 +2,10 @@
 
 set -e
 
+# Workaround for HyperEnclave/SGX SDK device path expectations
+ln -sf /dev/hyperenclave /dev/sgx_enclave || true
+ln -sf /dev/hyperenclave /dev/isgx || true
+
 echo "========================================================"
 echo "      TEE Management Platform - Full System Launcher"
 echo "========================================================"
