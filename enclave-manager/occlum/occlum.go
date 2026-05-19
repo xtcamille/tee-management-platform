@@ -67,7 +67,7 @@ func Start(taskID string, uploadedCodePath string) (int, context.CancelFunc, <-c
 	if err != nil {
 		return 0, nil, nil, nil, fmt.Errorf("failed to get free port: %v", err)
 	}
-
+	port = 8443
 	if err := tuneOcclumConfig(enclaveDir, taskID, port); err != nil {
 		return 0, nil, nil, nil, fmt.Errorf("failed to tune Occlum.json: %v", err)
 	}
@@ -102,7 +102,6 @@ func Start(taskID string, uploadedCodePath string) (int, context.CancelFunc, <-c
 		log.Println("[Occlum] Running enclave process: occlum run /bin/enclave-app")
 		cmdRun := exec.CommandContext(ctx, "occlum", "run", "/bin/enclave-app")
 		cmdRun.Dir = enclaveDir
-		cmdRun.Env = append(os.Environ(), "SGX_MODE="+getenv("SGX_MODE", "SIM"))
 		cmdRun.Stdout = os.Stdout
 		cmdRun.Stderr = os.Stderr
 		if err := cmdRun.Run(); err != nil {
@@ -191,7 +190,6 @@ func execCmd(dir string, name string, args ...string) error {
 	log.Printf("[Occlum] Executing command in %s: %s %v", dir, name, args)
 	cmd := exec.Command(name, args...)
 	cmd.Dir = dir
-	cmd.Env = append(os.Environ(), "SGX_MODE="+getenv("SGX_MODE", "SIM"))
 	if out, err := cmd.CombinedOutput(); err != nil {
 		log.Printf("[Occlum] Command failed in %s: %s %v, err: %v, output: %s", dir, name, args, err, string(out))
 		return err
