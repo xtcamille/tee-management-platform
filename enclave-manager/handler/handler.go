@@ -162,7 +162,7 @@ func UploadCode(w http.ResponseWriter, r *http.Request) {
 			LocalIP:    localIP,
 		})
 	}
-
+	log.Printf("[UploadCode] Finished storing task info completely for task %s", taskID)
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{
 		"task_id": taskID,
