@@ -102,6 +102,7 @@ func Start(taskID string, uploadedCodePath string) (int, context.CancelFunc, <-c
 		log.Println("[Occlum] Running enclave process: occlum run /bin/enclave-app")
 		cmdRun := exec.CommandContext(ctx, "occlum", "run", "/bin/enclave-app")
 		cmdRun.Dir = enclaveDir
+		cmdRun.Env = append(os.Environ(), "SGX_MODE="+getenv("SGX_MODE", "SIM"))
 		cmdRun.Stdout = os.Stdout
 		cmdRun.Stderr = os.Stderr
 		if err := cmdRun.Run(); err != nil {
@@ -190,6 +191,7 @@ func execCmd(dir string, name string, args ...string) error {
 	log.Printf("[Occlum] Executing command in %s: %s %v", dir, name, args)
 	cmd := exec.Command(name, args...)
 	cmd.Dir = dir
+	cmd.Env = append(os.Environ(), "SGX_MODE="+getenv("SGX_MODE", "SIM"))
 	if out, err := cmd.CombinedOutput(); err != nil {
 		log.Printf("[Occlum] Command failed in %s: %s %v, err: %v, output: %s", dir, name, args, err, string(out))
 		return err
@@ -214,10 +216,10 @@ func tuneOcclumConfig(workspace string, taskID string, port int) error {
 	process := ensureMap(config, "process")
 	env := ensureMap(config, "env")
 
-	ensureMinSize(resourceLimits, "user_space_size", "2048MB")
-	ensureMinInt(resourceLimits, "max_num_of_threads", 128)
-	ensureMinSize(process, "default_heap_size", "512MB")
-	ensureMinSize(process, "default_mmap_size", "1024MB")
+	ensureMinSize(resourceLimits, "user_space_size", "512MB")
+	ensureMinInt(resourceLimits, "max_num_of_threads", 64)
+	ensureMinSize(process, "default_heap_size", "128MB")
+	ensureMinSize(process, "default_mmap_size", "256MB")
 	ensureStringListContains(config, "entry_points", "/bin")
 	ensureStringListContains(config, "entry_points", "/usr/bin")
 	ensureStringListContains(config, "entry_points", "/usr/local/bin")
