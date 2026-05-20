@@ -314,14 +314,18 @@ func trackEnclaveExit(taskID string, taskInfo *TaskInfo, startVersion int64, exi
 }
 
 func GetTaskStatus(w http.ResponseWriter, r *http.Request) {
+	log.Printf("[GetTaskStatus] Received request from %s", r.RemoteAddr)
 	taskID := r.URL.Query().Get("task_id")
 	if taskID == "" {
+		log.Printf("[GetTaskStatus] Missing task_id in request from %s", r.RemoteAddr)
 		http.Error(w, "Missing task_id", http.StatusBadRequest)
 		return
 	}
+	log.Printf("[GetTaskStatus] Querying status for task_id: %s", taskID)
 
 	taskInfoAny, ok := taskMap.Load(taskID)
 	if !ok {
+		log.Printf("[GetTaskStatus] Task not found: %s", taskID)
 		http.Error(w, "Task not found", http.StatusNotFound)
 		return
 	}
@@ -461,11 +465,14 @@ func ProcessData(w http.ResponseWriter, r *http.Request) {
 }
 
 func GetTaskInfo(w http.ResponseWriter, r *http.Request) {
+	log.Printf("[GetTaskInfo] Received request from %s", r.RemoteAddr)
 	contractId := r.URL.Query().Get("contractId")
 	if contractId == "" {
+		log.Printf("[GetTaskInfo] Missing contractId in request from %s", r.RemoteAddr)
 		http.Error(w, "Missing contractId", http.StatusBadRequest)
 		return
 	}
+	log.Printf("[GetTaskInfo] Processing request for contractId: %s", contractId)
 
 	entryAny, ok := contractMap.Load(contractId)
 	if !ok {
@@ -473,6 +480,7 @@ func GetTaskInfo(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	entry := entryAny.(*ContractDBEntry)
+	log.Printf("[GetTaskInfo] Found contract entry for contractId %s, associated with taskID %s", contractId, entry.TaskID)
 
 	taskInfoAny, ok := taskMap.Load(entry.TaskID)
 	status := ""
@@ -481,6 +489,9 @@ func GetTaskInfo(w http.ResponseWriter, r *http.Request) {
 		taskInfo.mu.RLock()
 		status = string(taskInfo.Status)
 		taskInfo.mu.RUnlock()
+		log.Printf("[GetTaskInfo] Found taskInfo for taskID %s, current status: %s", entry.TaskID, status)
+	} else {
+		log.Printf("[GetTaskInfo] TaskInfo not found for taskID %s (contractId: %s)", entry.TaskID, contractId)
 	}
 
 	w.Header().Set("Content-Type", "application/json")
